@@ -1,5 +1,15 @@
 # delphi-wrapper-sqlite3
 
+ # delphi-inspect
+
+![delphi-wrapper-sqlite3 logo](https://continuous-delphi.github.io/assets/logos/delphi-wrapper-sqlite3-480x270.png)
+
+[![Delphi](https://img.shields.io/badge/delphi-red)](https://www.embarcadero.com/products/delphi)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/continuous-delphi/delphi-wrapper-sqlite3)
+[![Continuous Delphi](https://img.shields.io/badge/org-continuous--delphi-red)](https://github.com/continuous-delphi)
+
+
 Lightweight cross-platform Delphi wrapper for SQLite. Dynamically loads the platform-native SQLite library at runtime. 
 
 ## Platform Support
@@ -15,7 +25,7 @@ Lightweight cross-platform Delphi wrapper for SQLite. Dynamically loads the plat
 
 ## Requirements
 
-- Delphi 12+ (uses inline variables, `PUTF8Char`)
+- Newer version of Delphi (uses inline variables, `PUTF8Char`)
 - SQLite library available on the target platform (see table above)
 
 ## Quick Start
@@ -269,6 +279,11 @@ delphi-sqlite3/
     Delphi.SQLite3.Test.pas  -- 40 test methods
 ```
 
-## License
+------------------------------------------------------------------------
 
-MIT
+![continuous-delphi logo](https://continuous-delphi.github.io/assets/logos/continuous-delphi-480x270.png)
+
+## Part of Continuous Delphi
+
+This tool is part of the [Continuous-Delphi](https://github.com/continuous-delphi)
+ecosystem, focused on improving engineering discipline for long-lived Delphi systems.
