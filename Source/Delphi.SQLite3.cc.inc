@@ -1,0 +1,1 @@
+{$IFDEF MSWINDOWS}stdcall{$ELSE}cdecl{$ENDIF}

@@ -1,0 +1,719 @@
+unit Delphi.SQLite3;
+
+// TSQLite3 -- lightweight cross-platform Delphi wrapper for SQLite.
+//
+// Loads the platform-native SQLite library at runtime:
+//   Windows    winsqlite3.dll   (ships with Windows 10 1803+)
+//   Linux      libsqlite3.so    (install: apt install libsqlite3-0)
+//   macOS      libsqlite3.dylib (ships with macOS)
+//   iOS        libsqlite3.dylib (ships with iOS)
+//   Android    libsqlite.so     (ships with Android)
+//
+// Usage:
+//   var DB := TSQLite3.Create('mydata.db');
+//   try
+//     DB.ExecSQL('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT)');
+//     DB.ExecSQL('INSERT INTO items (name) VALUES (:name)', ['Widget']);
+//     var Q := DB.Query('SELECT id, name FROM items WHERE id > :min', [0]);
+//     try
+//       while Q.Next do
+//         WriteLn(Q.AsInteger(0), ': ', Q.AsString(1));
+//     finally
+//       Q.Free;
+//     end;
+//   finally
+//     DB.Free;
+//   end;
+//
+// Calling convention:
+//   Windows Win32  stdcall  (winsqlite3.dll is a Windows system DLL)
+//   Windows Win64  stdcall  (single ABI on x64, annotation irrelevant)
+//   All POSIX      cdecl    (standard C convention)
+
+interface
+
+uses
+  System.SysUtils;
+
+type
+
+  ESQLite3Error = class(Exception)
+  private
+    FErrorCode: Integer;
+  public
+    constructor Create(AErrorCode: Integer; const AMessage: string);
+    property ErrorCode: Integer read FErrorCode;
+  end;
+
+  TSQLite3Query = class;
+
+  // -----------------------------------------------------------------------
+  // TSQLite3 -- database connection
+  // -----------------------------------------------------------------------
+
+  TSQLite3 = class
+  private
+    FHandle: Pointer;
+    procedure Check(AResultCode: Integer);
+    function PrepareStmt(const ASQL: string): Pointer;
+    procedure BindParams(AStmt: Pointer; const AParams: array of const);
+  public
+    constructor Create(const ADbPath: string);
+    destructor Destroy; override;
+
+    // Execute DDL / DML with no result set.
+    procedure ExecSQL(const ASQL: string); overload;
+    procedure ExecSQL(const ASQL: string; const AParams: array of const); overload;
+
+    // Execute a query and return a result set. Caller must free the result.
+    function Query(const ASQL: string): TSQLite3Query; overload;
+    function Query(const ASQL: string; const AParams: array of const): TSQLite3Query; overload;
+
+    // Query helpers that return a single scalar value.
+    // Raise ESQLite3Error if the query returns no rows.
+    function QueryValue(const ASQL: string): string; overload;
+    function QueryValue(const ASQL: string; const AParams: array of const): string; overload;
+    function QueryInt(const ASQL: string): Integer; overload;
+    function QueryInt(const ASQL: string; const AParams: array of const): Integer; overload;
+
+    // Transactions.
+    procedure StartTransaction;
+    procedure Commit;
+    procedure Rollback;
+
+    // Number of rows changed by the most recent INSERT, UPDATE, or DELETE.
+    function Changes: Integer;
+
+    // Row ID of the most recent successful INSERT.
+    function LastInsertRowId: Int64;
+
+    // SQLite library version string (e.g. '3.39.4').
+    class function LibVersion: string;
+
+    // True if the platform SQLite library can be loaded on this system.
+    class function IsAvailable: Boolean;
+
+    property Handle: Pointer read FHandle;
+  end;
+
+  // -----------------------------------------------------------------------
+  // TSQLite3Query -- result set (forward-only cursor)
+  // -----------------------------------------------------------------------
+
+  TSQLite3Query = class
+  private
+    FStmt: Pointer;
+    FOwnerDb: TSQLite3;
+    FHasRow: Boolean;
+    FStepped: Boolean;
+    FColCount: Integer;
+  public
+    // Do not call directly -- use TSQLite3.Query instead.
+    constructor Create(AOwnerDb: TSQLite3; AStmt: Pointer);
+    destructor Destroy; override;
+
+    // Advance to the next row. Returns False when no more rows.
+    function Next: Boolean;
+
+    // True when the cursor is past the last row.
+    function EOF: Boolean;
+
+    // Column metadata.
+    property ColumnCount: Integer read FColCount;
+    function ColumnName(AIndex: Integer): string;
+
+    // Column value accessors (0-based index).
+    function AsString(AIndex: Integer): string;
+    function AsInteger(AIndex: Integer): Integer;
+    function AsInt64(AIndex: Integer): Int64;
+    function AsFloat(AIndex: Integer): Double;
+    function AsBlob(AIndex: Integer): TBytes;
+    function IsNull(AIndex: Integer): Boolean;
+
+    // Resolve a column name to its 0-based index. Returns -1 if not found.
+    function IndexOf(const AName: string): Integer;
+  end;
+
+implementation
+
+{$IFDEF MSWINDOWS}
+uses
+  Winapi.Windows;
+{$ENDIF}
+{$IFDEF POSIX}
+uses
+  Posix.Dlfcn;
+{$ENDIF}
+
+// =========================================================================
+// SQLite constants
+// =========================================================================
+
+const
+  SQLITE_OK    = 0;
+  SQLITE_ERROR = 1;
+  SQLITE_ROW   = 100;
+  SQLITE_DONE  = 101;
+
+  SQLITE_NULL  = 5;
+
+  SQLITE_TRANSIENT: Pointer = Pointer(-1);
+
+// =========================================================================
+// Platform-specific library name and calling convention
+// =========================================================================
+
+{$IFDEF MSWINDOWS}
+const
+  SQLITE_LIB = 'winsqlite3.dll';
+{$ENDIF}
+{$IFDEF LINUX}
+const
+  SQLITE_LIB = 'libsqlite3.so';
+{$ENDIF}
+{$IFDEF MACOS}
+  {$IFNDEF IOS}
+const
+  SQLITE_LIB = 'libsqlite3.dylib';
+  {$ENDIF}
+{$ENDIF}
+{$IFDEF IOS}
+const
+  SQLITE_LIB = 'libsqlite3.dylib';
+{$ENDIF}
+{$IFDEF ANDROID}
+const
+  SQLITE_LIB = 'libsqlite.so';
+{$ENDIF}
+
+// Calling convention: stdcall on Windows, cdecl on POSIX.
+// On Win64 there is a single calling convention so stdcall is harmless.
+// Delphi.SQLite3.cc.inc expands to the correct convention for the target platform.
+
+// =========================================================================
+// Platform-agnostic module handle type
+// =========================================================================
+
+type
+  TModuleHandle = {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF};
+
+// =========================================================================
+// Function pointer types
+// =========================================================================
+
+type
+  TSQLitePtr = Pointer;  // sqlite3 *
+  TStmtPtr   = Pointer;  // sqlite3_stmt *
+
+var
+  _sqlite3_open:              function(const filename: PUTF8Char; var db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_close:             function(db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_errmsg:            function(db: TSQLitePtr): PUTF8Char; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_exec:              function(db: TSQLitePtr; const sql: PUTF8Char; callback, cbArg: Pointer; errmsg: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_prepare_v2:        function(db: TSQLitePtr; const sql: PUTF8Char; nByte: Integer; var stmt: TStmtPtr; tail: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_step:              function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_reset:             function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_finalize:          function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_int:          function(stmt: TStmtPtr; idx, value: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_int64:        function(stmt: TStmtPtr; idx: Integer; value: Int64): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_double:       function(stmt: TStmtPtr; idx: Integer; value: Double): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_text:         function(stmt: TStmtPtr; idx: Integer; const text: PUTF8Char; nByte: Integer; destructor_: Pointer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_blob:         function(stmt: TStmtPtr; idx: Integer; const data: Pointer; nByte: Integer; destructor_: Pointer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_bind_null:         function(stmt: TStmtPtr; idx: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_count:      function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_name:       function(stmt: TStmtPtr; col: Integer): PUTF8Char; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_type:       function(stmt: TStmtPtr; col: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_int:        function(stmt: TStmtPtr; col: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_int64:      function(stmt: TStmtPtr; col: Integer): Int64; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_double:     function(stmt: TStmtPtr; col: Integer): Double; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_text:       function(stmt: TStmtPtr; col: Integer): PUTF8Char; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_blob:       function(stmt: TStmtPtr; col: Integer): Pointer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_column_bytes:      function(stmt: TStmtPtr; col: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_changes:           function(db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_last_insert_rowid: function(db: TSQLitePtr): Int64; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_libversion:        function: PUTF8Char; {$I Delphi.SQLite3.cc.inc};
+
+  FModule: TModuleHandle = 0;
+  FLoaded: Boolean = False;
+  FLoadAttempted: Boolean = False;
+
+// =========================================================================
+// Platform-agnostic dynamic loading
+// =========================================================================
+
+function PlatformLoadLibrary(const AName: string): TModuleHandle;
+begin
+{$IFDEF MSWINDOWS}
+  Result := LoadLibrary(PChar(AName));
+{$ENDIF}
+{$IFDEF POSIX}
+  Result := dlopen(MarshaledAString(UTF8String(AName)), RTLD_LAZY);
+{$ENDIF}
+end;
+
+function PlatformGetProc(AModule: TModuleHandle; const AName: UTF8String): Pointer;
+begin
+{$IFDEF MSWINDOWS}
+  Result := GetProcAddress(AModule, PAnsiChar(AName));
+{$ENDIF}
+{$IFDEF POSIX}
+  Result := dlsym(AModule, MarshaledAString(AName));
+{$ENDIF}
+end;
+
+procedure PlatformFreeLibrary(AModule: TModuleHandle);
+begin
+{$IFDEF MSWINDOWS}
+  FreeLibrary(AModule);
+{$ENDIF}
+{$IFDEF POSIX}
+  dlclose(AModule);
+{$ENDIF}
+end;
+
+// =========================================================================
+// Loader
+// =========================================================================
+
+function TryLoadSQLite: Boolean;
+
+  function Resolve(const AName: UTF8String): Pointer;
+  begin
+    Result := PlatformGetProc(FModule, AName);
+    if Result = nil then
+    begin
+      PlatformFreeLibrary(FModule);
+      FModule := 0;
+      raise ESQLite3Error.Create(0, Format('%s: export "%s" not found', [SQLITE_LIB, string(AName)]));
+    end;
+  end;
+
+begin
+  if FLoaded then
+    Exit(True);
+  if FLoadAttempted then
+    Exit(FLoaded);
+
+  FLoadAttempted := True;
+  FModule := PlatformLoadLibrary(SQLITE_LIB);
+  if FModule = 0 then
+    Exit(False);
+
+  @_sqlite3_open              := Resolve('sqlite3_open');
+  @_sqlite3_close             := Resolve('sqlite3_close');
+  @_sqlite3_errmsg            := Resolve('sqlite3_errmsg');
+  @_sqlite3_exec              := Resolve('sqlite3_exec');
+  @_sqlite3_prepare_v2        := Resolve('sqlite3_prepare_v2');
+  @_sqlite3_step              := Resolve('sqlite3_step');
+  @_sqlite3_reset             := Resolve('sqlite3_reset');
+  @_sqlite3_finalize          := Resolve('sqlite3_finalize');
+  @_sqlite3_bind_int          := Resolve('sqlite3_bind_int');
+  @_sqlite3_bind_int64        := Resolve('sqlite3_bind_int64');
+  @_sqlite3_bind_double       := Resolve('sqlite3_bind_double');
+  @_sqlite3_bind_text         := Resolve('sqlite3_bind_text');
+  @_sqlite3_bind_blob         := Resolve('sqlite3_bind_blob');
+  @_sqlite3_bind_null         := Resolve('sqlite3_bind_null');
+  @_sqlite3_column_count      := Resolve('sqlite3_column_count');
+  @_sqlite3_column_name       := Resolve('sqlite3_column_name');
+  @_sqlite3_column_type       := Resolve('sqlite3_column_type');
+  @_sqlite3_column_int        := Resolve('sqlite3_column_int');
+  @_sqlite3_column_int64      := Resolve('sqlite3_column_int64');
+  @_sqlite3_column_double     := Resolve('sqlite3_column_double');
+  @_sqlite3_column_text       := Resolve('sqlite3_column_text');
+  @_sqlite3_column_blob       := Resolve('sqlite3_column_blob');
+  @_sqlite3_column_bytes      := Resolve('sqlite3_column_bytes');
+  @_sqlite3_changes           := Resolve('sqlite3_changes');
+  @_sqlite3_last_insert_rowid := Resolve('sqlite3_last_insert_rowid');
+  @_sqlite3_libversion        := Resolve('sqlite3_libversion');
+
+  FLoaded := True;
+  Result := True;
+end;
+
+procedure EnsureLoaded;
+begin
+  if not TryLoadSQLite then
+    raise ESQLite3Error.Create(0, Format('Failed to load %s. Ensure SQLite is available on this platform.', [SQLITE_LIB]));
+end;
+
+// =========================================================================
+// ESQLite3Error
+// =========================================================================
+
+constructor ESQLite3Error.Create(AErrorCode: Integer; const AMessage: string);
+begin
+  inherited Create(AMessage);
+  FErrorCode := AErrorCode;
+end;
+
+// =========================================================================
+// TSQLite3
+// =========================================================================
+
+constructor TSQLite3.Create(const ADbPath: string);
+var
+  Utf8Path: UTF8String;
+begin
+  inherited Create;
+  EnsureLoaded;
+  Utf8Path := UTF8String(ADbPath);
+  Check(_sqlite3_open(PUTF8Char(Utf8Path), FHandle));
+end;
+
+destructor TSQLite3.Destroy;
+begin
+  if FHandle <> nil then
+    _sqlite3_close(FHandle);
+  inherited;
+end;
+
+procedure TSQLite3.Check(AResultCode: Integer);
+var
+  Msg: string;
+begin
+  if AResultCode <> SQLITE_OK then
+  begin
+    if FHandle <> nil then
+      Msg := string(UTF8String(_sqlite3_errmsg(FHandle)))
+    else
+      Msg := Format('SQLite error %d', [AResultCode]);
+    raise ESQLite3Error.Create(AResultCode, Msg);
+  end;
+end;
+
+function TSQLite3.PrepareStmt(const ASQL: string): Pointer;
+var
+  Utf8SQL: UTF8String;
+begin
+  Utf8SQL := UTF8String(ASQL);
+  Result := nil;
+  Check(_sqlite3_prepare_v2(FHandle, PUTF8Char(Utf8SQL), -1, Result, nil));
+  if Result = nil then
+    raise ESQLite3Error.Create(SQLITE_ERROR, 'Failed to prepare statement');
+end;
+
+procedure TSQLite3.BindParams(AStmt: Pointer; const AParams: array of const);
+var
+  I, Idx: Integer;
+  Utf8: UTF8String;
+  S: string;
+begin
+  for I := 0 to High(AParams) do
+  begin
+    Idx := I + 1;  // SQLite parameters are 1-based.
+    case AParams[I].VType of
+      vtInteger:
+        Check(_sqlite3_bind_int(AStmt, Idx, AParams[I].VInteger));
+      vtBoolean:
+        Check(_sqlite3_bind_int(AStmt, Idx, Ord(AParams[I].VBoolean)));
+      vtInt64:
+        Check(_sqlite3_bind_int64(AStmt, Idx, AParams[I].VInt64^));
+      vtExtended:
+        Check(_sqlite3_bind_double(AStmt, Idx, AParams[I].VExtended^));
+      vtCurrency:
+        Check(_sqlite3_bind_double(AStmt, Idx, AParams[I].VCurrency^));
+      vtUnicodeString:
+        begin
+          S := string(AParams[I].VUnicodeString);
+          Utf8 := UTF8String(S);
+          Check(_sqlite3_bind_text(AStmt, Idx, PUTF8Char(Utf8), Length(Utf8), SQLITE_TRANSIENT));
+        end;
+      vtAnsiString:
+        begin
+          Utf8 := UTF8String(AnsiString(AParams[I].VAnsiString));
+          Check(_sqlite3_bind_text(AStmt, Idx, PUTF8Char(Utf8), Length(Utf8), SQLITE_TRANSIENT));
+        end;
+      vtWideString:
+        begin
+          S := string(WideString(AParams[I].VWideString));
+          Utf8 := UTF8String(S);
+          Check(_sqlite3_bind_text(AStmt, Idx, PUTF8Char(Utf8), Length(Utf8), SQLITE_TRANSIENT));
+        end;
+      vtChar:
+        begin
+          Utf8 := UTF8String(string(AParams[I].VChar));
+          Check(_sqlite3_bind_text(AStmt, Idx, PUTF8Char(Utf8), Length(Utf8), SQLITE_TRANSIENT));
+        end;
+      vtWideChar:
+        begin
+          Utf8 := UTF8String(string(AParams[I].VWideChar));
+          Check(_sqlite3_bind_text(AStmt, Idx, PUTF8Char(Utf8), Length(Utf8), SQLITE_TRANSIENT));
+        end;
+      vtPointer:
+        begin
+          if AParams[I].VPointer = nil then
+            Check(_sqlite3_bind_null(AStmt, Idx))
+          else
+            raise ESQLite3Error.Create(0, Format('Unsupported non-nil pointer parameter at index %d', [I]));
+        end;
+    else
+      raise ESQLite3Error.Create(0, Format('Unsupported parameter type %d at index %d', [AParams[I].VType, I]));
+    end;
+  end;
+end;
+
+procedure TSQLite3.ExecSQL(const ASQL: string);
+var
+  Stmt: Pointer;
+begin
+  Stmt := PrepareStmt(ASQL);
+  try
+    case _sqlite3_step(Stmt) of
+      SQLITE_DONE: ; // success
+      SQLITE_ROW:  ; // unexpected result set, but not an error
+    else
+      Check(_sqlite3_reset(Stmt));  // propagates the error
+    end;
+  finally
+    _sqlite3_finalize(Stmt);
+  end;
+end;
+
+procedure TSQLite3.ExecSQL(const ASQL: string; const AParams: array of const);
+var
+  Stmt: Pointer;
+begin
+  Stmt := PrepareStmt(ASQL);
+  try
+    BindParams(Stmt, AParams);
+    case _sqlite3_step(Stmt) of
+      SQLITE_DONE: ;
+      SQLITE_ROW:  ;
+    else
+      Check(_sqlite3_reset(Stmt));
+    end;
+  finally
+    _sqlite3_finalize(Stmt);
+  end;
+end;
+
+function TSQLite3.Query(const ASQL: string): TSQLite3Query;
+var
+  Stmt: Pointer;
+begin
+  Stmt := PrepareStmt(ASQL);
+  Result := TSQLite3Query.Create(Self, Stmt);
+end;
+
+function TSQLite3.Query(const ASQL: string; const AParams: array of const): TSQLite3Query;
+var
+  Stmt: Pointer;
+begin
+  Stmt := PrepareStmt(ASQL);
+  try
+    BindParams(Stmt, AParams);
+  except
+    _sqlite3_finalize(Stmt);
+    raise;
+  end;
+  Result := TSQLite3Query.Create(Self, Stmt);
+end;
+
+function TSQLite3.QueryValue(const ASQL: string): string;
+var
+  Q: TSQLite3Query;
+begin
+  Q := Query(ASQL);
+  try
+    if not Q.Next then
+      raise ESQLite3Error.Create(0, 'Query returned no rows');
+    Result := Q.AsString(0);
+  finally
+    Q.Free;
+  end;
+end;
+
+function TSQLite3.QueryValue(const ASQL: string; const AParams: array of const): string;
+var
+  Q: TSQLite3Query;
+begin
+  Q := Query(ASQL, AParams);
+  try
+    if not Q.Next then
+      raise ESQLite3Error.Create(0, 'Query returned no rows');
+    Result := Q.AsString(0);
+  finally
+    Q.Free;
+  end;
+end;
+
+function TSQLite3.QueryInt(const ASQL: string): Integer;
+var
+  Q: TSQLite3Query;
+begin
+  Q := Query(ASQL);
+  try
+    if not Q.Next then
+      raise ESQLite3Error.Create(0, 'Query returned no rows');
+    Result := Q.AsInteger(0);
+  finally
+    Q.Free;
+  end;
+end;
+
+function TSQLite3.QueryInt(const ASQL: string; const AParams: array of const): Integer;
+var
+  Q: TSQLite3Query;
+begin
+  Q := Query(ASQL, AParams);
+  try
+    if not Q.Next then
+      raise ESQLite3Error.Create(0, 'Query returned no rows');
+    Result := Q.AsInteger(0);
+  finally
+    Q.Free;
+  end;
+end;
+
+procedure TSQLite3.StartTransaction;
+begin
+  ExecSQL('BEGIN TRANSACTION');
+end;
+
+procedure TSQLite3.Commit;
+begin
+  ExecSQL('COMMIT');
+end;
+
+procedure TSQLite3.Rollback;
+begin
+  ExecSQL('ROLLBACK');
+end;
+
+function TSQLite3.Changes: Integer;
+begin
+  Result := _sqlite3_changes(FHandle);
+end;
+
+function TSQLite3.LastInsertRowId: Int64;
+begin
+  Result := _sqlite3_last_insert_rowid(FHandle);
+end;
+
+class function TSQLite3.LibVersion: string;
+begin
+  EnsureLoaded;
+  Result := string(UTF8String(_sqlite3_libversion));
+end;
+
+class function TSQLite3.IsAvailable: Boolean;
+begin
+  Result := TryLoadSQLite;
+end;
+
+// =========================================================================
+// TSQLite3Query
+// =========================================================================
+
+constructor TSQLite3Query.Create(AOwnerDb: TSQLite3; AStmt: Pointer);
+begin
+  inherited Create;
+  FOwnerDb := AOwnerDb;
+  FStmt := AStmt;
+  FHasRow := False;
+  FStepped := False;
+  FColCount := _sqlite3_column_count(FStmt);
+end;
+
+destructor TSQLite3Query.Destroy;
+begin
+  if FStmt <> nil then
+    _sqlite3_finalize(FStmt);
+  inherited;
+end;
+
+function TSQLite3Query.Next: Boolean;
+var
+  RC: Integer;
+begin
+  FStepped := True;
+  RC := _sqlite3_step(FStmt);
+  case RC of
+    SQLITE_ROW:
+      begin
+        FHasRow := True;
+        Result := True;
+      end;
+    SQLITE_DONE:
+      begin
+        FHasRow := False;
+        Result := False;
+      end;
+  else
+    FHasRow := False;
+    FOwnerDb.Check(_sqlite3_reset(FStmt));
+    Result := False;
+  end;
+end;
+
+function TSQLite3Query.EOF: Boolean;
+begin
+  Result := FStepped and not FHasRow;
+end;
+
+function TSQLite3Query.ColumnName(AIndex: Integer): string;
+begin
+  Result := string(UTF8String(_sqlite3_column_name(FStmt, AIndex)));
+end;
+
+function TSQLite3Query.AsString(AIndex: Integer): string;
+var
+  P: PUTF8Char;
+begin
+  P := _sqlite3_column_text(FStmt, AIndex);
+  if P = nil then
+    Result := ''
+  else
+    Result := string(UTF8String(P));
+end;
+
+function TSQLite3Query.AsInteger(AIndex: Integer): Integer;
+begin
+  Result := _sqlite3_column_int(FStmt, AIndex);
+end;
+
+function TSQLite3Query.AsInt64(AIndex: Integer): Int64;
+begin
+  Result := _sqlite3_column_int64(FStmt, AIndex);
+end;
+
+function TSQLite3Query.AsFloat(AIndex: Integer): Double;
+begin
+  Result := _sqlite3_column_double(FStmt, AIndex);
+end;
+
+function TSQLite3Query.AsBlob(AIndex: Integer): TBytes;
+var
+  Size: Integer;
+  Data: Pointer;
+begin
+  Size := _sqlite3_column_bytes(FStmt, AIndex);
+  if Size = 0 then
+    Exit(nil);
+  Data := _sqlite3_column_blob(FStmt, AIndex);
+  SetLength(Result, Size);
+  Move(Data^, Result[0], Size);
+end;
+
+function TSQLite3Query.IsNull(AIndex: Integer): Boolean;
+begin
+  Result := _sqlite3_column_type(FStmt, AIndex) = SQLITE_NULL;
+end;
+
+function TSQLite3Query.IndexOf(const AName: string): Integer;
+var
+  I: Integer;
+begin
+  for I := 0 to FColCount - 1 do
+    if SameText(ColumnName(I), AName) then
+      Exit(I);
+  Result := -1;
+end;
+
+initialization
+
+finalization
+  if FModule <> 0 then
+    PlatformFreeLibrary(FModule);
+
+end.
