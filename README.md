@@ -1,7 +1,5 @@
 # delphi-wrapper-sqlite3
 
- # delphi-inspect
-
 ![delphi-wrapper-sqlite3 logo](https://continuous-delphi.github.io/assets/logos/delphi-wrapper-sqlite3-480x270.png)
 
 [![Delphi](https://img.shields.io/badge/delphi-red)](https://www.embarcadero.com/products/delphi)
