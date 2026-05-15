@@ -60,6 +60,9 @@ type
 
   TSQLite3Query = class;
 
+  // Return True to cancel the running operation.
+  TSQLite3ProgressFunc = reference to function: Boolean;
+
   // -----------------------------------------------------------------------
   // TSQLite3 -- database connection
   // -----------------------------------------------------------------------
@@ -67,6 +70,7 @@ type
   TSQLite3 = class
   private
     FHandle: Pointer;
+    FProgressFunc: TSQLite3ProgressFunc;
     procedure Check(AResultCode: Integer);
     function PrepareStmt(const ASQL: string): Pointer;
     procedure BindParams(AStmt: Pointer; const AParams: array of const);
@@ -104,6 +108,12 @@ type
     // GetPragma executes "PRAGMA name" and returns the result as a string.
     procedure SetPragma(const AName, AValue: string);
     function GetPragma(const AName: string): string;
+
+    // Register a progress callback invoked every AStepCount virtual machine
+    // instructions. Return True from AFunc to cancel the running operation
+    // (SQLite will return SQLITE_INTERRUPT). Call ClearProgressHandler to remove.
+    procedure SetProgressHandler(AStepCount: Integer; AFunc: TSQLite3ProgressFunc);
+    procedure ClearProgressHandler;
 
     // Number of rows changed by the most recent INSERT, UPDATE, or DELETE.
     function Changes: Integer;
@@ -259,6 +269,7 @@ var
   _sqlite3_column_blob:       function(stmt: TStmtPtr; col: Integer): Pointer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_column_bytes:      function(stmt: TStmtPtr; col: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_changes:           function(db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_progress_handler:  procedure(db: TSQLitePtr; nOps: Integer; xProgress: Pointer; pArg: Pointer); {$I Delphi.SQLite3.cc.inc};
   _sqlite3_last_insert_rowid: function(db: TSQLitePtr): Int64; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_libversion:        function: PUTF8Char; {$I Delphi.SQLite3.cc.inc};
 
@@ -357,6 +368,7 @@ begin
   @_sqlite3_column_blob       := Resolve('sqlite3_column_blob');
   @_sqlite3_column_bytes      := Resolve('sqlite3_column_bytes');
   @_sqlite3_changes           := Resolve('sqlite3_changes');
+  @_sqlite3_progress_handler  := Resolve('sqlite3_progress_handler');
   @_sqlite3_last_insert_rowid := Resolve('sqlite3_last_insert_rowid');
   @_sqlite3_libversion        := Resolve('sqlite3_libversion');
 
@@ -627,6 +639,28 @@ end;
 function TSQLite3.GetPragma(const AName: string): string;
 begin
   Result := QueryValue('PRAGMA ' + AName);
+end;
+
+// Trampoline: SQLite calls this with pArg = the TSQLite3 instance.
+// Returns non-zero to cancel the operation.
+function ProgressTrampoline(pArg: Pointer): Integer; {$I Delphi.SQLite3.cc.inc};
+begin
+  if Assigned(TSQLite3(pArg).FProgressFunc) and TSQLite3(pArg).FProgressFunc() then
+    Result := 1
+  else
+    Result := 0;
+end;
+
+procedure TSQLite3.SetProgressHandler(AStepCount: Integer; AFunc: TSQLite3ProgressFunc);
+begin
+  FProgressFunc := AFunc;
+  _sqlite3_progress_handler(FHandle, AStepCount, @ProgressTrampoline, Self);
+end;
+
+procedure TSQLite3.ClearProgressHandler;
+begin
+  _sqlite3_progress_handler(FHandle, 0, nil, nil);
+  FProgressFunc := nil;
 end;
 
 function TSQLite3.Changes: Integer;

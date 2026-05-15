@@ -188,6 +188,17 @@ type
     [Test]
     procedure TestTypicalFireDACConfiguration;
 
+    // -- Progress handler -------------------------------------------------
+
+    [Test]
+    procedure TestProgressHandlerCalled;
+
+    [Test]
+    procedure TestProgressHandlerCancelsOperation;
+
+    [Test]
+    procedure TestClearProgressHandler;
+
     // -- Error handling ---------------------------------------------------
 
     [Test]
@@ -1032,6 +1043,77 @@ begin
     DB.ExecSQL('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
     DB.ExecSQL('INSERT INTO t (name) VALUES (:n)', ['test']);
     Assert.AreEqual('test', DB.QueryValue('SELECT name FROM t WHERE id = 1'));
+  finally
+    DB.Free;
+  end;
+end;
+
+// -- Progress handler -----------------------------------------------------
+
+procedure TSQLite3Tests.TestProgressHandlerCalled;
+var
+  DB: TSQLite3;
+  CallCount: Integer;
+begin
+  DB := NewDbWithTable;
+  try
+    CallCount := 0;
+    DB.SetProgressHandler(1, function: Boolean
+    begin
+      Inc(CallCount);
+      Result := False;  // don't cancel
+    end);
+    // Insert enough data to trigger multiple VM instructions.
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''A'')');
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''B'')');
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''C'')');
+    Assert.IsTrue(CallCount > 0, 'Progress handler should have been called at least once');
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestProgressHandlerCancelsOperation;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDbWithTable;
+  try
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''Existing'')');
+    // Set handler that always cancels.
+    DB.SetProgressHandler(1, function: Boolean begin Result := True; end);
+    try
+      DB.ExecSQL('INSERT INTO items (name) VALUES (''ShouldFail'')');
+      Assert.Fail('Should have raised ESQLite3Error (SQLITE_INTERRUPT)');
+    except
+      on E: ESQLite3Error do
+        ; // expected -- operation was interrupted
+    end;
+    // The first row should still be there; the cancelled insert should not.
+    DB.ClearProgressHandler;
+    Assert.AreEqual(1, DB.QueryInt('SELECT COUNT(*) FROM items'));
+    Assert.AreEqual('Existing', DB.QueryValue('SELECT name FROM items'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestClearProgressHandler;
+var
+  DB: TSQLite3;
+  CallCount: Integer;
+begin
+  DB := NewDbWithTable;
+  try
+    CallCount := 0;
+    DB.SetProgressHandler(1, function: Boolean begin Inc(CallCount); Result := False; end);
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''A'')');
+    Assert.IsTrue(CallCount > 0, 'Handler should have been called');
+
+    var CountBefore := CallCount;
+    DB.ClearProgressHandler;
+    DB.ExecSQL('INSERT INTO items (name) VALUES (''B'')');
+    Assert.AreEqual(CountBefore, CallCount, 'Handler should not be called after clearing');
   finally
     DB.Free;
   end;
