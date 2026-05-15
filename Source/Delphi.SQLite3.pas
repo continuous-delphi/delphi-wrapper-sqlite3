@@ -169,7 +169,11 @@ const
 {$ENDIF}
 {$IFDEF LINUX}
 const
-  SQLITE_LIB = 'libsqlite3.so';
+  // Runtime packages install libsqlite3.so.0 (the soname). The unversioned
+  // libsqlite3.so symlink is only present when the -dev package is installed.
+  // Try the soname first for maximum compatibility on server/container images.
+  SQLITE_LIB          = 'libsqlite3.so.0';
+  SQLITE_LIB_FALLBACK = 'libsqlite3.so';
 {$ENDIF}
 {$IFDEF MACOS}
   {$IFNDEF IOS}
@@ -296,6 +300,10 @@ begin
 
   FLoadAttempted := True;
   FModule := PlatformLoadLibrary(SQLITE_LIB);
+{$IFDEF LINUX}
+  if FModule = 0 then
+    FModule := PlatformLoadLibrary(SQLITE_LIB_FALLBACK);
+{$ENDIF}
   if FModule = 0 then
     Exit(False);
 
@@ -333,7 +341,7 @@ end;
 procedure EnsureLoaded;
 begin
   if not TryLoadSQLite then
-    raise ESQLite3Error.Create(0, Format('Failed to load %s. Ensure SQLite is available on this platform.', [SQLITE_LIB]));
+    raise ESQLite3Error.Create(0, 'Failed to load SQLite library (' + SQLITE_LIB + '). Ensure SQLite is installed on this platform.');
 end;
 
 // =========================================================================
