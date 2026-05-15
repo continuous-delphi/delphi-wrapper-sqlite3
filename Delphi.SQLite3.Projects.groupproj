@@ -1,0 +1,48 @@
+﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup>
+        <ProjectGuid>{499BF6D1-CFE3-471D-BF60-5BEDECDBF59C}</ProjectGuid>
+    </PropertyGroup>
+    <ItemGroup>
+        <Projects Include="Tests\Delphi.SQLite3.Tests.dproj">
+            <Dependencies/>
+        </Projects>
+        <Projects Include="projects\APIBackup\Demo.Backup.dproj">
+            <Dependencies/>
+        </Projects>
+    </ItemGroup>
+    <ProjectExtensions>
+        <Borland.Personality>Default.Personality.12</Borland.Personality>
+        <Borland.ProjectType/>
+        <BorlandProject>
+            <Default.Personality/>
+        </BorlandProject>
+    </ProjectExtensions>
+    <Target Name="Delphi_SQLite3_Tests">
+        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj"/>
+    </Target>
+    <Target Name="Delphi_SQLite3_Tests:Clean">
+        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Delphi_SQLite3_Tests:Make">
+        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Demo_Backup">
+        <MSBuild Projects="projects\APIBackup\Demo.Backup.dproj"/>
+    </Target>
+    <Target Name="Demo_Backup:Clean">
+        <MSBuild Projects="projects\APIBackup\Demo.Backup.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Demo_Backup:Make">
+        <MSBuild Projects="projects\APIBackup\Demo.Backup.dproj" Targets="Make"/>
+    </Target>
+    <Target Name="Build">
+        <CallTarget Targets="Delphi_SQLite3_Tests;Demo_Backup"/>
+    </Target>
+    <Target Name="Clean">
+        <CallTarget Targets="Delphi_SQLite3_Tests:Clean;Demo_Backup:Clean"/>
+    </Target>
+    <Target Name="Make">
+        <CallTarget Targets="Delphi_SQLite3_Tests:Make;Demo_Backup:Make"/>
+    </Target>
+    <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
+</Project>

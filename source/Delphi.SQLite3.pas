@@ -1,34 +1,15 @@
-unit Delphi.SQLite3;
+(*
 
-// TSQLite3 -- lightweight cross-platform Delphi wrapper for SQLite.
-//
-// Loads the platform-native SQLite library at runtime:
-//   Windows    winsqlite3.dll   (ships with Windows 10 1803+)
-//   Linux      libsqlite3.so    (install: apt install libsqlite3-0)
-//   macOS      libsqlite3.dylib (ships with macOS)
-//   iOS        libsqlite3.dylib (ships with iOS)
-//   Android    libsqlite.so     (ships with Android)
-//
-// Usage:
-//   var DB := TSQLite3.Create('mydata.db');
-//   try
-//     DB.ExecSQL('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT)');
-//     DB.ExecSQL('INSERT INTO items (name) VALUES (:name)', ['Widget']);
-//     var Q := DB.Query('SELECT id, name FROM items WHERE id > :min', [0]);
-//     try
-//       while Q.Next do
-//         WriteLn(Q.AsInteger(0), ': ', Q.AsString(1));
-//     finally
-//       Q.Free;
-//     end;
-//   finally
-//     DB.Free;
-//   end;
-//
-// Calling convention:
-//   Windows Win32  stdcall  (winsqlite3.dll is a Windows system DLL)
-//   Windows Win64  stdcall  (single ABI on x64, annotation irrelevant)
-//   All POSIX      cdecl    (standard C convention)
+  delphi-wrapper-sqlite3
+  https://github.com/continuous-delphi/delphi-wrapper-sqlite3
+
+  Multi-platform SQLite3 class library for Delphi
+
+  License: MIT
+  Copyright (c) 2026 Darian Miller
+
+*)
+unit Delphi.SQLite3;
 
 interface
 
@@ -63,10 +44,35 @@ type
   // Return True to cancel the running operation.
   TSQLite3ProgressFunc = reference to function: Boolean;
 
-  // -----------------------------------------------------------------------
-  // TSQLite3 -- database connection
-  // -----------------------------------------------------------------------
-
+  // TSQLite3 -- lightweight cross-platform Delphi wrapper for SQLite.
+  //
+  // Loads the platform-native SQLite library at runtime:
+  //   Windows    winsqlite3.dll   (ships with Windows 10 1803+)
+  //   Linux      libsqlite3.so    (install: apt install libsqlite3-0)
+  //   macOS      libsqlite3.dylib (ships with macOS)
+  //   iOS        libsqlite3.dylib (ships with iOS)
+  //   Android    libsqlite.so     (ships with Android)
+  //
+  // Usage:
+  //   var DB := TSQLite3.Create('mydata.db');
+  //   try
+  //     DB.ExecSQL('CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT)');
+  //     DB.ExecSQL('INSERT INTO items (name) VALUES (:name)', ['Widget']);
+  //     var Q := DB.Query('SELECT id, name FROM items WHERE id > :min', [0]);
+  //     try
+  //       while Q.Next do
+  //         WriteLn(Q.AsInteger(0), ': ', Q.AsString(1));
+  //     finally
+  //       Q.Free;
+  //     end;
+  //   finally
+  //     DB.Free;
+  //   end;
+  //
+  // Calling convention:
+  //   Windows Win32  stdcall  (winsqlite3.dll is a Windows system DLL)
+  //   Windows Win64  stdcall  (single ABI on x64, annotation irrelevant)
+  //   All POSIX      cdecl    (standard C convention)
   TSQLite3 = class
   private
     FHandle: Pointer;
@@ -126,6 +132,11 @@ type
 
     // True if the platform SQLite library can be loaded on this system.
     class function IsAvailable: Boolean;
+
+    // Resolve a raw SQLite API function by name from the loaded library.
+    // Use this to access API functions not wrapped by TSQLite3 (e.g. backup,
+    // user-defined functions). Returns nil if the export is not found.
+    class function GetAPIProc(const AName: UTF8String): Pointer;
 
     property Handle: Pointer read FHandle;
   end;
@@ -682,6 +693,12 @@ end;
 class function TSQLite3.IsAvailable: Boolean;
 begin
   Result := TryLoadSQLite;
+end;
+
+class function TSQLite3.GetAPIProc(const AName: UTF8String): Pointer;
+begin
+  EnsureLoaded;
+  Result := PlatformGetProc(FModule, AName);
 end;
 
 // =========================================================================

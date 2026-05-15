@@ -16,10 +16,12 @@ uses
   {$ELSE}
   DUnitX.Loggers.Console,
   DUnitX.Loggers.XML.NUnit,
-  {$ENDIF}
+  {$ENDIF }
   DUnitX.TestFramework,
   Delphi.SQLite3 in '..\Source\Delphi.SQLite3.pas',
-  Delphi.SQLite3.Test in 'Delphi.SQLite3.Test.pas';
+  Delphi.SQLite3.Backup in '..\source\Delphi.SQLite3.Backup.pas',
+  Delphi.SQLite3.Test in 'Delphi.SQLite3.Test.pas',
+  Delphi.SQLite3.Backup.Test in 'Delphi.SQLite3.Backup.Test.pas';
 
 { keep comment here to protect the following conditional from being removed by the IDE when adding a unit }
 {$IFNDEF TESTINSIGHT}
