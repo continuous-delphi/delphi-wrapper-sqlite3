@@ -3,6 +3,7 @@
 ![delphi-wrapper-sqlite3 logo](https://continuous-delphi.github.io/assets/logos/delphi-wrapper-sqlite3-480x270.png)
 
 [![Delphi](https://img.shields.io/badge/delphi-red)](https://www.embarcadero.com/products/delphi)
+[![Coverage](assets/coverage/coverage-badge.svg)](assets/coverage/CodeCoverage_Summary.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/continuous-delphi/delphi-wrapper-sqlite3)
 [![Continuous Delphi](https://img.shields.io/badge/org-continuous--delphi-red)](https://github.com/continuous-delphi)
@@ -292,7 +293,7 @@ delphi-wrapper-sqlite3/
     Delphi.SQLite3.pas            -- core wrapper (TSQLite3, TSQLite3Query)
     Delphi.SQLite3.cc.inc         -- calling convention include (stdcall/cdecl)
     Delphi.SQLite3.Backup.pas     -- online backup/restore via raw API access
-  tests/
+  test/
     Delphi.SQLite3.Tests.dpr      -- DUnitX test project (64 tests)
     Delphi.SQLite3.Test.pas       -- core wrapper tests
     Delphi.SQLite3.Backup.Test.pas-- backup/restore tests

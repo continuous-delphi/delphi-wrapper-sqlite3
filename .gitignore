@@ -112,3 +112,4 @@ TestInsightSettings.ini
 *.md
 /log
 *.xml
+*.html
