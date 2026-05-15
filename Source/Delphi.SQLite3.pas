@@ -35,6 +35,19 @@ interface
 uses
   System.SysUtils;
 
+const
+  // Open flags for TSQLite3.Create. Combine with OR.
+  SQLITE_OPEN_READONLY      = $00000001;
+  SQLITE_OPEN_READWRITE     = $00000002;
+  SQLITE_OPEN_CREATE        = $00000004;
+  SQLITE_OPEN_URI           = $00000040;
+  SQLITE_OPEN_MEMORY        = $00000080;
+  SQLITE_OPEN_NOMUTEX       = $00008000;
+  SQLITE_OPEN_FULLMUTEX     = $00010000;
+  SQLITE_OPEN_SHAREDCACHE   = $00020000;
+  SQLITE_OPEN_PRIVATECACHE  = $00040000;
+  SQLITE_OPEN_NOFOLLOW      = $01000000;
+
 type
 
   ESQLite3Error = class(Exception)
@@ -58,7 +71,8 @@ type
     function PrepareStmt(const ASQL: string): Pointer;
     procedure BindParams(AStmt: Pointer; const AParams: array of const);
   public
-    constructor Create(const ADbPath: string);
+    // Open (or create) a database. Default flags: read-write + create.
+    constructor Create(const ADbPath: string; AFlags: Integer = SQLITE_OPEN_READWRITE or SQLITE_OPEN_CREATE);
     destructor Destroy; override;
 
     // Execute DDL / DML with no result set.
@@ -80,6 +94,16 @@ type
     procedure StartTransaction;
     procedure Commit;
     procedure Rollback;
+
+    // Set the busy timeout in milliseconds. When a table is locked, SQLite
+    // will retry for up to AMilliseconds before returning SQLITE_BUSY.
+    // Pass 0 to disable (fail immediately on lock).
+    procedure BusyTimeout(AMilliseconds: Integer);
+
+    // Get or set a PRAGMA value. SetPragma executes "PRAGMA name = value".
+    // GetPragma executes "PRAGMA name" and returns the result as a string.
+    procedure SetPragma(const AName, AValue: string);
+    function GetPragma(const AName: string): string;
 
     // Number of rows changed by the most recent INSERT, UPDATE, or DELETE.
     function Changes: Integer;
@@ -210,8 +234,9 @@ type
   TStmtPtr   = Pointer;  // sqlite3_stmt *
 
 var
-  _sqlite3_open:              function(const filename: PUTF8Char; var db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_open_v2:           function(const filename: PUTF8Char; var db: TSQLitePtr; flags: Integer; const zVfs: PUTF8Char): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_close:             function(db: TSQLitePtr): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_busy_timeout:      function(db: TSQLitePtr; ms: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_errmsg:            function(db: TSQLitePtr): PUTF8Char; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_exec:              function(db: TSQLitePtr; const sql: PUTF8Char; callback, cbArg: Pointer; errmsg: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_prepare_v2:        function(db: TSQLitePtr; const sql: PUTF8Char; nByte: Integer; var stmt: TStmtPtr; tail: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
@@ -307,8 +332,9 @@ begin
   if FModule = 0 then
     Exit(False);
 
-  @_sqlite3_open              := Resolve('sqlite3_open');
+  @_sqlite3_open_v2           := Resolve('sqlite3_open_v2');
   @_sqlite3_close             := Resolve('sqlite3_close');
+  @_sqlite3_busy_timeout      := Resolve('sqlite3_busy_timeout');
   @_sqlite3_errmsg            := Resolve('sqlite3_errmsg');
   @_sqlite3_exec              := Resolve('sqlite3_exec');
   @_sqlite3_prepare_v2        := Resolve('sqlite3_prepare_v2');
@@ -358,14 +384,14 @@ end;
 // TSQLite3
 // =========================================================================
 
-constructor TSQLite3.Create(const ADbPath: string);
+constructor TSQLite3.Create(const ADbPath: string; AFlags: Integer);
 var
   Utf8Path: UTF8String;
 begin
   inherited Create;
   EnsureLoaded;
   Utf8Path := UTF8String(ADbPath);
-  Check(_sqlite3_open(PUTF8Char(Utf8Path), FHandle));
+  Check(_sqlite3_open_v2(PUTF8Char(Utf8Path), FHandle, AFlags, nil));
 end;
 
 destructor TSQLite3.Destroy;
@@ -586,6 +612,21 @@ end;
 procedure TSQLite3.Rollback;
 begin
   ExecSQL('ROLLBACK');
+end;
+
+procedure TSQLite3.BusyTimeout(AMilliseconds: Integer);
+begin
+  Check(_sqlite3_busy_timeout(FHandle, AMilliseconds));
+end;
+
+procedure TSQLite3.SetPragma(const AName, AValue: string);
+begin
+  ExecSQL('PRAGMA ' + AName + ' = ' + AValue);
+end;
+
+function TSQLite3.GetPragma(const AName: string): string;
+begin
+  Result := QueryValue('PRAGMA ' + AName);
 end;
 
 function TSQLite3.Changes: Integer;

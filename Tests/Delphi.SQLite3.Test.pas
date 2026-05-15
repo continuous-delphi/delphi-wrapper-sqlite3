@@ -146,6 +146,48 @@ type
     [Test]
     procedure TestTransactionRollback;
 
+    // -- Open flags -------------------------------------------------------
+
+    [Test]
+    procedure TestOpenReadOnly;
+
+    [Test]
+    procedure TestOpenReadOnlyRejectsWrite;
+
+    [Test]
+    procedure TestOpenDefaultCreatesFile;
+
+    [Test]
+    procedure TestOpenPrivateCache;
+
+    // -- BusyTimeout ------------------------------------------------------
+
+    [Test]
+    procedure TestBusyTimeoutSetsWithoutError;
+
+    [Test]
+    procedure TestBusyTimeoutZeroDisables;
+
+    // -- Pragmas ----------------------------------------------------------
+
+    [Test]
+    procedure TestSetAndGetPragmaJournalMode;
+
+    [Test]
+    procedure TestSetPragmaForeignKeys;
+
+    [Test]
+    procedure TestSetPragmaSynchronous;
+
+    [Test]
+    procedure TestSetPragmaLockingMode;
+
+    [Test]
+    procedure TestGetPragmaReturnsCurrentValue;
+
+    [Test]
+    procedure TestTypicalFireDACConfiguration;
+
     // -- Error handling ---------------------------------------------------
 
     [Test]
@@ -781,6 +823,215 @@ begin
     DB.Rollback;
     Assert.AreEqual(1, DB.QueryInt('SELECT COUNT(*) FROM items'));
     Assert.AreEqual('Keeper', DB.QueryValue('SELECT name FROM items'));
+  finally
+    DB.Free;
+  end;
+end;
+
+// -- Open flags -----------------------------------------------------------
+
+procedure TSQLite3Tests.TestOpenReadOnly;
+var
+  DB: TSQLite3;
+begin
+  // Create a database first.
+  DB := TSQLite3.Create(FDbPath);
+  try
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+    DB.ExecSQL('INSERT INTO t (x) VALUES (42)');
+  finally
+    DB.Free;
+  end;
+
+  // Reopen read-only and verify we can read.
+  DB := TSQLite3.Create(FDbPath, SQLITE_OPEN_READONLY);
+  try
+    Assert.AreEqual(42, DB.QueryInt('SELECT x FROM t'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestOpenReadOnlyRejectsWrite;
+var
+  DB: TSQLite3;
+begin
+  DB := TSQLite3.Create(FDbPath);
+  try
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+  finally
+    DB.Free;
+  end;
+
+  DB := TSQLite3.Create(FDbPath, SQLITE_OPEN_READONLY);
+  try
+    try
+      DB.ExecSQL('INSERT INTO t (x) VALUES (1)');
+      Assert.Fail('Should have raised ESQLite3Error for write on read-only db');
+    except
+      on E: ESQLite3Error do
+        ; // expected
+    end;
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestOpenDefaultCreatesFile;
+var
+  DB: TSQLite3;
+  NewPath: string;
+begin
+  NewPath := TPath.Combine(FTempDir, 'created.db');
+  Assert.IsFalse(TFile.Exists(NewPath));
+  DB := TSQLite3.Create(NewPath);
+  try
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+  finally
+    DB.Free;
+  end;
+  Assert.IsTrue(TFile.Exists(NewPath));
+end;
+
+procedure TSQLite3Tests.TestOpenPrivateCache;
+var
+  DB: TSQLite3;
+begin
+  DB := TSQLite3.Create(FDbPath, SQLITE_OPEN_READWRITE or SQLITE_OPEN_CREATE or SQLITE_OPEN_PRIVATECACHE);
+  try
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+    Assert.AreEqual(0, DB.QueryInt('SELECT COUNT(*) FROM t'));
+  finally
+    DB.Free;
+  end;
+end;
+
+// -- BusyTimeout ----------------------------------------------------------
+
+procedure TSQLite3Tests.TestBusyTimeoutSetsWithoutError;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.BusyTimeout(5000);
+    // No exception means success. Verify db still works.
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+    Assert.AreEqual(0, DB.QueryInt('SELECT COUNT(*) FROM t'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestBusyTimeoutZeroDisables;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.BusyTimeout(5000);
+    DB.BusyTimeout(0);  // disable
+    DB.ExecSQL('CREATE TABLE t (x INTEGER)');
+    Assert.AreEqual(0, DB.QueryInt('SELECT COUNT(*) FROM t'));
+  finally
+    DB.Free;
+  end;
+end;
+
+// -- Pragmas --------------------------------------------------------------
+
+procedure TSQLite3Tests.TestSetAndGetPragmaJournalMode;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.SetPragma('journal_mode', 'WAL');
+    Assert.AreEqual('wal', DB.GetPragma('journal_mode'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestSetPragmaForeignKeys;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.SetPragma('foreign_keys', 'ON');
+    Assert.AreEqual('1', DB.GetPragma('foreign_keys'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestSetPragmaSynchronous;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.SetPragma('synchronous', 'FULL');
+    // synchronous FULL = 2
+    Assert.AreEqual('2', DB.GetPragma('synchronous'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestSetPragmaLockingMode;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    DB.SetPragma('locking_mode', 'NORMAL');
+    Assert.AreEqual('normal', DB.GetPragma('locking_mode'));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestGetPragmaReturnsCurrentValue;
+var
+  DB: TSQLite3;
+  PageSize: string;
+begin
+  DB := NewDb;
+  try
+    PageSize := DB.GetPragma('page_size');
+    // Default page size is typically 4096 but varies by platform.
+    Assert.IsNotEmpty(PageSize, 'page_size should return a value');
+    Assert.IsTrue(StrToIntDef(PageSize, 0) > 0, 'page_size should be a positive integer');
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestTypicalFireDACConfiguration;
+var
+  DB: TSQLite3;
+begin
+  // Mirrors the user's standard FireDAC connection setup.
+  DB := TSQLite3.Create(FDbPath, SQLITE_OPEN_READWRITE or SQLITE_OPEN_CREATE or SQLITE_OPEN_PRIVATECACHE);
+  try
+    DB.BusyTimeout(90000);
+    DB.SetPragma('locking_mode', 'NORMAL');
+    DB.SetPragma('journal_mode', 'WAL');
+    DB.SetPragma('foreign_keys', 'ON');
+    DB.SetPragma('synchronous', 'FULL');
+
+    // Verify all settings took effect.
+    Assert.AreEqual('normal', DB.GetPragma('locking_mode'));
+    Assert.AreEqual('wal', DB.GetPragma('journal_mode'));
+    Assert.AreEqual('1', DB.GetPragma('foreign_keys'));
+    Assert.AreEqual('2', DB.GetPragma('synchronous'));
+
+    // Verify the database is functional with this configuration.
+    DB.ExecSQL('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)');
+    DB.ExecSQL('INSERT INTO t (name) VALUES (:n)', ['test']);
+    Assert.AreEqual('test', DB.QueryValue('SELECT name FROM t WHERE id = 1'));
   finally
     DB.Free;
   end;
