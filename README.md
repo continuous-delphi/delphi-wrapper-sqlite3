@@ -3,6 +3,7 @@
 ![delphi-wrapper-sqlite3 logo](https://continuous-delphi.github.io/assets/logos/delphi-wrapper-sqlite3-480x270.png)
 
 [![Delphi](https://img.shields.io/badge/delphi-red)](https://www.embarcadero.com/products/delphi)
+[![Platform Support](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS%20%7C%20Android-lightgrey)](https://docwiki.embarcadero.com/PlatformStatus/en/Main_Page)
 [![Coverage](assets/coverage/coverage-badge.svg)](assets/coverage/CodeCoverage_Summary.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/continuous-delphi/delphi-wrapper-sqlite3)
