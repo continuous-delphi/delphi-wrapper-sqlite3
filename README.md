@@ -228,9 +228,23 @@ If the library is not present, `TSQLite3.Create` raises `ESQLite3Error`. Use `TS
 
 SQLite itself is thread-safe (serialized mode by default). However, a single `TSQLite3` instance and its associated `TSQLite3Query` objects should be used from one thread at a time, or the caller must serialize access. For multi-threaded applications, create a separate `TSQLite3` connection per thread.
 
+## Demo Project
+
+### APIBackup -- Todo List with Backup/Restore
+
+A VCL application in `projects/APIBackup/` that demonstrates `TSQLite3` and `TSQLite3Backup` working together. The form has a `TStringGrid` showing todo entries from `todo.db3`, an edit control with an Add button to insert rows, and Backup/Restore buttons.
+
+- **Create** -- opens (or creates) `todo.db3` on startup with WAL journal mode
+- **Read** -- populates the grid from the `todos` table
+- **Insert** -- adds a new row from the edit control
+- **Backup** -- saves to `todo.backup.db3` via `TSQLite3Backup.BackupToFile` (single-file output, no WAL sidecars)
+- **Restore** -- loads from the backup via `TSQLite3Backup.RestoreFromFile` and refreshes the grid
+
+The backup unit (`Delphi.SQLite3.Backup.pas` in `source/`) also serves as a reference for extending `TSQLite3` via raw API access. It resolves `sqlite3_backup_init`/`step`/`finish`/`remaining`/`pagecount` at runtime using `TSQLite3.GetAPIProc` and `TSQLite3.Handle`, without modifying the core unit.
+
 ## Tests
 
-The test suite uses DUnitX and covers 40 tests:
+The test suite uses DUnitX and covers 64 tests:
 
 | Category | Tests |
 |---|---|
@@ -243,11 +257,16 @@ The test suite uses DUnitX and covers 40 tests:
 | UPDATE / DELETE | 3 |
 | LastInsertRowId | 2 |
 | Transactions | 2 |
+| Open flags | 4 |
+| Busy timeout | 2 |
+| Pragmas | 6 |
+| Progress handler | 3 |
 | Error handling | 2 |
 | Multiple queries | 1 |
 | Type coercion | 2 |
 | Blob read | 1 |
 | NULL handling | 1 |
+| Backup / restore | 9 |
 
 ### Running Tests
 
@@ -270,13 +289,17 @@ Tests\Win64\Debug\Delphi.SQLite3.Tests.exe --exit:Continue
 ### Project Layout
 
 ```
-delphi-sqlite3/
-  Source/
-    Delphi.SQLite3.pas       -- the single source unit
-    Delphi.SQLite3.cc.inc    -- calling convention include (stdcall/cdecl)
-  Tests/
-    Delphi.SQLite3.Tests.dpr -- DUnitX test project
-    Delphi.SQLite3.Test.pas  -- 40 test methods
+delphi-wrapper-sqlite3/
+  source/
+    Delphi.SQLite3.pas            -- core wrapper (TSQLite3, TSQLite3Query)
+    Delphi.SQLite3.cc.inc         -- calling convention include (stdcall/cdecl)
+    Delphi.SQLite3.Backup.pas     -- online backup/restore via raw API access
+  tests/
+    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (64 tests)
+    Delphi.SQLite3.Test.pas       -- core wrapper tests
+    Delphi.SQLite3.Backup.Test.pas-- backup/restore tests
+  projects/
+    APIBackup/                    -- VCL demo: todo list with backup/restore
 ```
 
 ------------------------------------------------------------------------
