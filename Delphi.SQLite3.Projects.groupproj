@@ -3,10 +3,10 @@
         <ProjectGuid>{499BF6D1-CFE3-471D-BF60-5BEDECDBF59C}</ProjectGuid>
     </PropertyGroup>
     <ItemGroup>
-        <Projects Include="Tests\Delphi.SQLite3.Tests.dproj">
+        <Projects Include="projects\APIBackup\Demo.Backup.dproj">
             <Dependencies/>
         </Projects>
-        <Projects Include="projects\APIBackup\Demo.Backup.dproj">
+        <Projects Include="test\Delphi.SQLite3.Tests.dproj">
             <Dependencies/>
         </Projects>
     </ItemGroup>
@@ -17,15 +17,6 @@
             <Default.Personality/>
         </BorlandProject>
     </ProjectExtensions>
-    <Target Name="Delphi_SQLite3_Tests">
-        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj"/>
-    </Target>
-    <Target Name="Delphi_SQLite3_Tests:Clean">
-        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj" Targets="Clean"/>
-    </Target>
-    <Target Name="Delphi_SQLite3_Tests:Make">
-        <MSBuild Projects="Tests\Delphi.SQLite3.Tests.dproj" Targets="Make"/>
-    </Target>
     <Target Name="Demo_Backup">
         <MSBuild Projects="projects\APIBackup\Demo.Backup.dproj"/>
     </Target>
@@ -35,14 +26,23 @@
     <Target Name="Demo_Backup:Make">
         <MSBuild Projects="projects\APIBackup\Demo.Backup.dproj" Targets="Make"/>
     </Target>
+    <Target Name="Delphi_SQLite3_Tests">
+        <MSBuild Projects="test\Delphi.SQLite3.Tests.dproj"/>
+    </Target>
+    <Target Name="Delphi_SQLite3_Tests:Clean">
+        <MSBuild Projects="test\Delphi.SQLite3.Tests.dproj" Targets="Clean"/>
+    </Target>
+    <Target Name="Delphi_SQLite3_Tests:Make">
+        <MSBuild Projects="test\Delphi.SQLite3.Tests.dproj" Targets="Make"/>
+    </Target>
     <Target Name="Build">
-        <CallTarget Targets="Delphi_SQLite3_Tests;Demo_Backup"/>
+        <CallTarget Targets="Demo_Backup;Delphi_SQLite3_Tests"/>
     </Target>
     <Target Name="Clean">
-        <CallTarget Targets="Delphi_SQLite3_Tests:Clean;Demo_Backup:Clean"/>
+        <CallTarget Targets="Demo_Backup:Clean;Delphi_SQLite3_Tests:Clean"/>
     </Target>
     <Target Name="Make">
-        <CallTarget Targets="Delphi_SQLite3_Tests:Make;Demo_Backup:Make"/>
+        <CallTarget Targets="Demo_Backup:Make;Delphi_SQLite3_Tests:Make"/>
     </Target>
     <Import Project="$(BDS)\Bin\CodeGear.Group.Targets" Condition="Exists('$(BDS)\Bin\CodeGear.Group.Targets')"/>
 </Project>
