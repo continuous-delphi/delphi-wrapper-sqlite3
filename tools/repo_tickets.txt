@@ -1,0 +1,39 @@
+---
+Title: Add pre-commit hook for auto-incrementing version sequence number
+Issue: #4
+Labels: enhancement, tooling
+Body:
+Set up a git pre-commit hook that bumps the 3rd part (sequence) of the
+version constant in `source/Delphi.SQLite3.Info.pas` using
+`Invoke-DelphiIncVer` from delphi-powershell-ci, and zeros the 4th part
+(build). The hook stages the updated file so it is part of the commit.
+
+Create `tools/hooks/pre-commit` with the hook script, and
+`tools/configure-hooks.bat` that runs
+`git config core.hooksPath tools/hooks` for new-clone setup.
+
+Add a `.gitignore` in `tools/` to exclude `commit*.bat` session scripts.
+
+Reference: `incver-setup.md` pattern from delphi-parser.
+
+Acceptance criteria:
+- [ ] `tools/hooks/pre-commit` exists and bumps sequence via Invoke-DelphiIncVer
+- [ ] `tools/configure-hooks.bat` sets core.hooksPath
+- [ ] `tools/.gitignore` excludes commit*.bat
+- [ ] After running configure-hooks, every commit auto-increments the 3rd version part
+---
+Title: Add IncVer build step to CI pipeline for local build numbering
+Issue: #5
+Labels: enhancement, tooling
+Body:
+Add an IncVer action to `clean-build-test-cover.json` that bumps the 4th
+part (build) of the version constant in `source/Delphi.SQLite3.Info.pas`
+on every `Invoke-DelphiCi` run. This tracks iterations between commits
+so "21.2 works but 21.3 doesn't" pinpoints the edit.
+
+The IncVer step should be the first action in the pipeline, before clean.
+
+Acceptance criteria:
+- [ ] IncVer step added as first pipeline action in clean-build-test-cover.json
+- [ ] Targets `source/Delphi.SQLite3.Info.pas`, style WinVer, part build
+- [ ] Running `Invoke-DelphiCi` increments the 4th version number
