@@ -1,10 +1,10 @@
-﻿unit Delphi.SQLite3.Info;
+unit Delphi.SQLite3.Info;
 
 interface
 
 const
 
-  Version = '0.1.21.0';
+  Version = '0.1.22.0';
 
 implementation
 
