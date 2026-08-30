@@ -74,6 +74,23 @@ function Query(const ASQL: string): TSQLite3Query;
 function Query(const ASQL: string; const AParams: array of const): TSQLite3Query;
 ```
 
+The no-parameter `ExecSQL` runs **every** semicolon-separated statement in the
+string, so it can execute a full schema or migration script in one call:
+
+```pascal
+DB.ExecSQL(
+  'CREATE TABLE a (x INTEGER);' +
+  'CREATE TABLE b (y INTEGER);' +
+  'INSERT INTO b (y) VALUES (7)');
+```
+
+If a statement fails partway through, `ExecSQL` raises `ESQLite3Error` and stops
+at that statement; statements before it have already been applied (each
+auto-commits). The **parameterized** `ExecSQL`/`Query` overloads are
+single-statement -- positional `array of const` parameters cannot be split
+across multiple statements, so pass one statement per call when binding
+parameters.
+
 #### Scalar Helpers
 
 Return the first column of the first row. Raise `ESQLite3Error` if the query returns no rows.
@@ -162,6 +179,11 @@ finally
   Q.Free;
 end;
 ```
+
+On read, `AsBlob` returns an empty `TBytes` (`nil`) for **both** a zero-length
+BLOB and a NULL column, because `TBytes` has no null state. If you need to tell
+the two apart, use `IsNull` (or `typeof(col)` in SQL); a zero-length BLOB
+reports `IsNull = False` while a NULL column reports `IsNull = True`.
 
 ### Error Handling
 
@@ -265,13 +287,14 @@ The backup unit (`Delphi.SQLite3.Backup.pas` in `source/`) also serves as a refe
 
 ## Tests
 
-The test suite uses DUnitX and covers 66 tests:
+The test suite uses DUnitX and covers 68 tests:
 
 | Category | Tests |
 |---|---|
 | Availability and version | 2 |
 | Open / close | 3 |
 | DDL (CREATE TABLE) | 2 |
+| Multi-statement exec | 2 |
 | INSERT / SELECT | 7 |
 | Scalar query helpers | 5 |
 | Result set navigation | 7 |
@@ -316,7 +339,7 @@ delphi-wrapper-sqlite3/
     Delphi.SQLite3.cc.inc         -- calling convention include (stdcall/cdecl)
     Delphi.SQLite3.Backup.pas     -- online backup/restore via raw API access
   test/
-    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (66 tests)
+    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (68 tests)
     Delphi.SQLite3.Test.pas       -- core wrapper tests
     Delphi.SQLite3.Backup.Test.pas-- backup/restore tests
   projects/

@@ -82,3 +82,86 @@ Acceptance criteria:
 - [ ] Empty `TBytes` binds a zero-length BLOB, distinct from NULL
 - [ ] Round-trip test writes a BLOB and reads it back byte-for-byte
 - [ ] README documents the BLOB write path; CHANGELOG entry added
+---
+Title: Multi-statement SQL is silently dropped in ExecSQL (only first statement runs)
+Issue: #7
+Status: closed
+Labels: bug
+Body:
+`TSQLite3.PrepareStmt` calls `sqlite3_prepare_v2(FHandle, sql, -1, stmt, nil)`
+with the `pzTail` out-parameter set to `nil`, and nothing loops over the tail.
+`prepare_v2` compiles only the FIRST statement in the string; the remainder is
+never executed and no error is raised. Every path that goes through
+`PrepareStmt` (ExecSQL, Query, QueryValue, QueryInt) is affected.
+
+Symptom -- only table `a` is created, silently:
+
+    DB.ExecSQL('CREATE TABLE a(x INTEGER); CREATE TABLE b(y INTEGER)');
+
+This bites anyone running a schema/migration script or any batch of statements.
+
+Compounding fact: `_sqlite3_exec` is already imported and resolved
+(`source/Delphi.SQLite3.pas` lines ~278 and ~377) but is NEVER called
+anywhere -- it is dead code today. `sqlite3_exec` natively runs multiple
+semicolon-separated statements.
+
+Suggested fix (pick one during implementation):
+- Route the no-parameter `ExecSQL(const ASQL: string)` overload through the
+  already-imported `sqlite3_exec`, which executes all statements in the string
+  and reports errors via its errmsg out-parameter. This puts the dead import to
+  use and gives script/batch execution for the common (no-params) case.
+- OR loop `prepare_v2` over the returned `pzTail`, stepping/finalizing each
+  statement in turn, so the parameterized paths also support multiple
+  statements. (Parameter binding across multiple statements is ambiguous --
+  positional `array of const` has no per-statement grouping -- so if the
+  parameterized overloads keep single-statement semantics, that limitation
+  must be documented.)
+
+Whichever route is chosen, `sqlite3_exec`'s `errmsg` (or the per-statement
+`Check`) must surface failures as `ESQLite3Error`, and `sqlite3_free` must be
+called on any errmsg buffer `sqlite3_exec` allocates (needs a `sqlite3_free`
+import).
+
+Acceptance criteria:
+- [ ] A multi-statement string passed to `ExecSQL` executes every statement
+- [ ] A failing statement mid-script raises `ESQLite3Error` (no silent drop)
+- [ ] If `sqlite3_exec` is used, its allocated errmsg is freed via `sqlite3_free`
+- [ ] The dead `_sqlite3_exec` import is either used or removed
+- [ ] Any remaining single-statement limitation (parameterized overloads) is
+      documented in the README
+- [ ] Test: a two-statement `ExecSQL` creates/affects both; a mid-script error
+      raises and is observable
+---
+Title: Make the SQLite library loader thread-safe
+Issue: #8
+Labels: enhancement
+Body:
+`TryLoadSQLite` (`source/Delphi.SQLite3.pas`) mutates the process-global
+loader state -- `FModule`, `FLoaded`, `FLoadAttempted`, and all the resolved
+`_sqlite3_*` function pointers -- with no synchronization. The README documents
+one `TSQLite3` connection per thread, but the LOADER itself is global and is
+triggered lazily on the first `TSQLite3.Create` / `LibVersion` / `IsAvailable`
+call. If two threads make their first call concurrently, they race: both can
+pass the `FLoaded`/`FLoadAttempted` checks, both call `PlatformLoadLibrary`
+(leaking one module handle), and both write the shared function-pointer table.
+
+Severity is low (redundant work + a leaked handle rather than a crash), but it
+is a genuine data race and cheap to eliminate.
+
+`TSQLite3Backup.EnsureResolved` has the same shape (class-var function
+pointers resolved lazily without a lock) and should be fixed the same way.
+
+Suggested fix:
+- Guard the load/resolve critical section with a unit-level lock (e.g.
+  `TMonitor` on a private sentinel object, or a `TCriticalSection` created in
+  the unit `initialization` and freed in `finalization`). Double-checked
+  pattern: cheap `if FLoaded then Exit` first, then acquire the lock and
+  re-check before loading, so the steady-state path stays lock-free.
+- Apply the same guard to `TSQLite3Backup.EnsureResolved`.
+
+Acceptance criteria:
+- [ ] Concurrent first-use from multiple threads loads the library exactly once
+      (no duplicate `LoadLibrary`/`dlopen`, no leaked module handle)
+- [ ] Steady-state calls after load do not acquire the lock (fast path retained)
+- [ ] `TSQLite3Backup.EnsureResolved` is likewise synchronized
+- [ ] Lock object lifetime is managed in initialization/finalization (no leak)

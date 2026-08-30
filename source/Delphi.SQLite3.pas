@@ -276,6 +276,7 @@ var
   _sqlite3_busy_timeout:      function(db: TSQLitePtr; ms: Integer): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_errmsg:            function(db: TSQLitePtr): PUTF8Char; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_exec:              function(db: TSQLitePtr; const sql: PUTF8Char; callback, cbArg: Pointer; errmsg: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
+  _sqlite3_free:              procedure(p: Pointer); {$I Delphi.SQLite3.cc.inc};
   _sqlite3_prepare_v2:        function(db: TSQLitePtr; const sql: PUTF8Char; nByte: Integer; var stmt: TStmtPtr; tail: PPAnsiChar): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_step:              function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
   _sqlite3_reset:             function(stmt: TStmtPtr): Integer; {$I Delphi.SQLite3.cc.inc};
@@ -375,6 +376,7 @@ begin
   @_sqlite3_busy_timeout      := Resolve('sqlite3_busy_timeout');
   @_sqlite3_errmsg            := Resolve('sqlite3_errmsg');
   @_sqlite3_exec              := Resolve('sqlite3_exec');
+  @_sqlite3_free              := Resolve('sqlite3_free');
   @_sqlite3_prepare_v2        := Resolve('sqlite3_prepare_v2');
   @_sqlite3_step              := Resolve('sqlite3_step');
   @_sqlite3_reset             := Resolve('sqlite3_reset');
@@ -575,19 +577,32 @@ end;
 
 procedure TSQLite3.ExecSQL(const ASQL: string);
 var
-  Stmt: Pointer;
+  Utf8SQL: UTF8String;
+  ErrMsg: PAnsiChar;
+  RC: Integer;
+  Msg: string;
 begin
-  Stmt := PrepareStmt(ASQL);
-  try
-    case _sqlite3_step(Stmt) of
-      SQLITE_DONE: ; // success
-      SQLITE_ROW:  ; // unexpected result set, but not an error
+  // sqlite3_exec runs every semicolon-separated statement in the string, so a
+  // schema/migration script executes in full. (The parameterized overload uses
+  // prepare/step and is single-statement -- positional params cannot be split
+  // across statements.)
+  Utf8SQL := UTF8String(ASQL);
+  ErrMsg := nil;
+  RC := _sqlite3_exec(FHandle, PUTF8Char(Utf8SQL), nil, nil, @ErrMsg);
+  if RC <> SQLITE_OK then
+  begin
+    // On error sqlite3_exec allocates the message via sqlite3_malloc; copy it
+    // to a Delphi string and free the C buffer to avoid a leak.
+    if ErrMsg <> nil then
+    begin
+      Msg := string(UTF8String(ErrMsg));
+      _sqlite3_free(ErrMsg);
+    end
     else
-      Check(_sqlite3_reset(Stmt));  // propagates the error
-    end;
-  finally
-    _sqlite3_finalize(Stmt);
+      Msg := Format('SQLite error %d', [RC]);
+    raise ESQLite3Error.Create(RC, Msg);
   end;
+  // On success ErrMsg is left nil (nothing allocated); no free needed.
 end;
 
 procedure TSQLite3.ExecSQL(const ASQL: string; const AParams: array of const);

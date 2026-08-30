@@ -50,6 +50,12 @@ type
     [Test]
     procedure TestCreateMultipleTables;
 
+    [Test]
+    procedure TestExecMultipleStatements;
+
+    [Test]
+    procedure TestExecMultiStatementMidScriptError;
+
     // -- Insert / select --------------------------------------------------
 
     [Test]
@@ -341,6 +347,44 @@ begin
     DB.ExecSQL('CREATE TABLE a (id INTEGER PRIMARY KEY)');
     DB.ExecSQL('CREATE TABLE b (id INTEGER PRIMARY KEY)');
     Assert.AreEqual(2, DB.QueryInt('SELECT COUNT(*) FROM sqlite_master WHERE type = ''table'''));
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestExecMultipleStatements;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    // All statements in the script must run, not just the first.
+    DB.ExecSQL('CREATE TABLE a (x INTEGER); CREATE TABLE b (y INTEGER); INSERT INTO b (y) VALUES (7)');
+    Assert.AreEqual(1, DB.QueryInt('SELECT COUNT(*) FROM sqlite_master WHERE type = ''table'' AND name = ''a'''), 'table a should exist');
+    Assert.AreEqual(1, DB.QueryInt('SELECT COUNT(*) FROM sqlite_master WHERE type = ''table'' AND name = ''b'''), 'table b should exist');
+    Assert.AreEqual(7, DB.QueryInt('SELECT y FROM b'), 'insert in third statement should have run');
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestExecMultiStatementMidScriptError;
+var
+  DB: TSQLite3;
+begin
+  DB := NewDb;
+  try
+    // The first statement auto-commits, then the bad statement raises; the
+    // statement after the error must not run.
+    try
+      DB.ExecSQL('CREATE TABLE ok (x INTEGER); THIS IS NOT VALID SQL; CREATE TABLE never (y INTEGER)');
+      Assert.Fail('Should have raised ESQLite3Error for the mid-script error');
+    except
+      on E: ESQLite3Error do
+        ; // expected
+    end;
+    Assert.AreEqual(1, DB.QueryInt('SELECT COUNT(*) FROM sqlite_master WHERE type = ''table'' AND name = ''ok'''), 'first statement should have applied');
+    Assert.AreEqual(0, DB.QueryInt('SELECT COUNT(*) FROM sqlite_master WHERE type = ''table'' AND name = ''never'''), 'statement after the error should not have run');
   finally
     DB.Free;
   end;
