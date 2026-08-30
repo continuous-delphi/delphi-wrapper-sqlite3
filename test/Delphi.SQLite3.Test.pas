@@ -6,6 +6,9 @@ uses
   DUnitX.TestFramework,
   System.SysUtils,
   System.IOUtils,
+  System.Classes,
+  System.SyncObjs,
+  System.Threading,
   Delphi.SQLite3;
 
 type
@@ -231,6 +234,11 @@ type
 
     [Test]
     procedure TestFloatPrecision;
+
+    // -- Concurrency ------------------------------------------------------
+
+    [Test]
+    procedure TestConcurrentConnectionsSmoke;
   end;
 
 implementation
@@ -1337,6 +1345,53 @@ begin
   finally
     DB.Free;
   end;
+end;
+
+// -- Concurrency ----------------------------------------------------------
+
+procedure TSQLite3Tests.TestConcurrentConnectionsSmoke;
+const
+  ThreadCount = 8;
+var
+  Tasks: array of ITask;
+  Failures: Integer;
+  I: Integer;
+begin
+  // Exercises the thread-safe loader guard and validates that concurrent
+  // connections (one per thread, as the README recommends) work without
+  // deadlock or corruption. Note: within a single test process the library is
+  // already loaded by earlier tests, so this cannot prove the "load exactly
+  // once" cold-path property -- it is a regression guard against the guarded
+  // path deadlocking/crashing and against concurrent use breaking.
+  Failures := 0;
+  SetLength(Tasks, ThreadCount);
+  for I := 0 to ThreadCount - 1 do
+    Tasks[I] := TTask.Run(
+      procedure
+      var
+        DB: TSQLite3;
+        Path: string;
+      begin
+        try
+          if not TSQLite3.IsAvailable then
+            TInterlocked.Increment(Failures);
+          // ThreadID is distinct per running pool thread, so the file names do
+          // not collide (avoids capturing the loop variable).
+          Path := TPath.Combine(FTempDir, Format('concurrent_%u.db', [TThread.Current.ThreadID]));
+          DB := TSQLite3.Create(Path);
+          try
+            DB.ExecSQL('CREATE TABLE t (x INTEGER); INSERT INTO t (x) VALUES (1); INSERT INTO t (x) VALUES (2)');
+            if DB.QueryInt('SELECT COUNT(*) FROM t') <> 2 then
+              TInterlocked.Increment(Failures);
+          finally
+            DB.Free;
+          end;
+        except
+          TInterlocked.Increment(Failures);
+        end;
+      end);
+  TTask.WaitForAll(Tasks);
+  Assert.AreEqual(0, Failures, 'concurrent first-use / connection usage should not fail');
 end;
 
 end.

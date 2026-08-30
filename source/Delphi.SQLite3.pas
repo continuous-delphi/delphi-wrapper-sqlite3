@@ -304,6 +304,7 @@ var
   FModule: TModuleHandle = 0;
   FLoaded: Boolean = False;
   FLoadAttempted: Boolean = False;
+  FLoadLock: TObject = nil;  // guards the one-time load/resolve; created in initialization
 
 // =========================================================================
 // Platform-agnostic dynamic loading
@@ -357,52 +358,67 @@ function TryLoadSQLite: Boolean;
   end;
 
 begin
+  // Lock-free fast path: once fully loaded, no synchronization is needed since
+  // the function pointers are never mutated again.
   if FLoaded then
     Exit(True);
-  if FLoadAttempted then
-    Exit(FLoaded);
 
-  FLoadAttempted := True;
-  FModule := PlatformLoadLibrary(SQLITE_LIB);
+  // Serialize the one-time load/resolve so concurrent first-use from multiple
+  // threads loads the library exactly once (no duplicate LoadLibrary/dlopen,
+  // no leaked module handle, no torn function-pointer table). FLoadAttempted is
+  // only read/written under the lock, so a partially-completed load on another
+  // thread can never be observed as "attempted and failed".
+  TMonitor.Enter(FLoadLock);
+  try
+    if FLoaded then
+      Exit(True);
+    if FLoadAttempted then
+      Exit(False);  // a prior attempt already failed; do not retry
+
+    FLoadAttempted := True;
+    FModule := PlatformLoadLibrary(SQLITE_LIB);
 {$IFDEF LINUX}
-  if FModule = 0 then
-    FModule := PlatformLoadLibrary(SQLITE_LIB_FALLBACK);
+    if FModule = 0 then
+      FModule := PlatformLoadLibrary(SQLITE_LIB_FALLBACK);
 {$ENDIF}
-  if FModule = 0 then
-    Exit(False);
+    if FModule = 0 then
+      Exit(False);
 
-  @_sqlite3_open_v2           := Resolve('sqlite3_open_v2');
-  @_sqlite3_close             := Resolve('sqlite3_close');
-  @_sqlite3_busy_timeout      := Resolve('sqlite3_busy_timeout');
-  @_sqlite3_errmsg            := Resolve('sqlite3_errmsg');
-  @_sqlite3_exec              := Resolve('sqlite3_exec');
-  @_sqlite3_free              := Resolve('sqlite3_free');
-  @_sqlite3_prepare_v2        := Resolve('sqlite3_prepare_v2');
-  @_sqlite3_step              := Resolve('sqlite3_step');
-  @_sqlite3_reset             := Resolve('sqlite3_reset');
-  @_sqlite3_finalize          := Resolve('sqlite3_finalize');
-  @_sqlite3_bind_int          := Resolve('sqlite3_bind_int');
-  @_sqlite3_bind_int64        := Resolve('sqlite3_bind_int64');
-  @_sqlite3_bind_double       := Resolve('sqlite3_bind_double');
-  @_sqlite3_bind_text         := Resolve('sqlite3_bind_text');
-  @_sqlite3_bind_blob         := Resolve('sqlite3_bind_blob');
-  @_sqlite3_bind_null         := Resolve('sqlite3_bind_null');
-  @_sqlite3_column_count      := Resolve('sqlite3_column_count');
-  @_sqlite3_column_name       := Resolve('sqlite3_column_name');
-  @_sqlite3_column_type       := Resolve('sqlite3_column_type');
-  @_sqlite3_column_int        := Resolve('sqlite3_column_int');
-  @_sqlite3_column_int64      := Resolve('sqlite3_column_int64');
-  @_sqlite3_column_double     := Resolve('sqlite3_column_double');
-  @_sqlite3_column_text       := Resolve('sqlite3_column_text');
-  @_sqlite3_column_blob       := Resolve('sqlite3_column_blob');
-  @_sqlite3_column_bytes      := Resolve('sqlite3_column_bytes');
-  @_sqlite3_changes           := Resolve('sqlite3_changes');
-  @_sqlite3_progress_handler  := Resolve('sqlite3_progress_handler');
-  @_sqlite3_last_insert_rowid := Resolve('sqlite3_last_insert_rowid');
-  @_sqlite3_libversion        := Resolve('sqlite3_libversion');
+    @_sqlite3_open_v2           := Resolve('sqlite3_open_v2');
+    @_sqlite3_close             := Resolve('sqlite3_close');
+    @_sqlite3_busy_timeout      := Resolve('sqlite3_busy_timeout');
+    @_sqlite3_errmsg            := Resolve('sqlite3_errmsg');
+    @_sqlite3_exec              := Resolve('sqlite3_exec');
+    @_sqlite3_free              := Resolve('sqlite3_free');
+    @_sqlite3_prepare_v2        := Resolve('sqlite3_prepare_v2');
+    @_sqlite3_step              := Resolve('sqlite3_step');
+    @_sqlite3_reset             := Resolve('sqlite3_reset');
+    @_sqlite3_finalize          := Resolve('sqlite3_finalize');
+    @_sqlite3_bind_int          := Resolve('sqlite3_bind_int');
+    @_sqlite3_bind_int64        := Resolve('sqlite3_bind_int64');
+    @_sqlite3_bind_double       := Resolve('sqlite3_bind_double');
+    @_sqlite3_bind_text         := Resolve('sqlite3_bind_text');
+    @_sqlite3_bind_blob         := Resolve('sqlite3_bind_blob');
+    @_sqlite3_bind_null         := Resolve('sqlite3_bind_null');
+    @_sqlite3_column_count      := Resolve('sqlite3_column_count');
+    @_sqlite3_column_name       := Resolve('sqlite3_column_name');
+    @_sqlite3_column_type       := Resolve('sqlite3_column_type');
+    @_sqlite3_column_int        := Resolve('sqlite3_column_int');
+    @_sqlite3_column_int64      := Resolve('sqlite3_column_int64');
+    @_sqlite3_column_double     := Resolve('sqlite3_column_double');
+    @_sqlite3_column_text       := Resolve('sqlite3_column_text');
+    @_sqlite3_column_blob       := Resolve('sqlite3_column_blob');
+    @_sqlite3_column_bytes      := Resolve('sqlite3_column_bytes');
+    @_sqlite3_changes           := Resolve('sqlite3_changes');
+    @_sqlite3_progress_handler  := Resolve('sqlite3_progress_handler');
+    @_sqlite3_last_insert_rowid := Resolve('sqlite3_last_insert_rowid');
+    @_sqlite3_libversion        := Resolve('sqlite3_libversion');
 
-  FLoaded := True;
-  Result := True;
+    FLoaded := True;
+    Result := True;
+  finally
+    TMonitor.Exit(FLoadLock);
+  end;
 end;
 
 procedure EnsureLoaded;
@@ -890,9 +906,11 @@ begin
 end;
 
 initialization
+  FLoadLock := TObject.Create;
 
 finalization
   if FModule <> 0 then
     PlatformFreeLibrary(FModule);
+  FLoadLock.Free;
 
 end.

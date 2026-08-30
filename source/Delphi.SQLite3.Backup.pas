@@ -77,6 +77,9 @@ const
   SQLITE_OK   = 0;
   SQLITE_DONE = 101;
 
+var
+  FResolveLock: TObject = nil;  // guards the one-time resolve; created in initialization
+
 class procedure TSQLite3Backup.EnsureResolved;
 
   procedure Require(AProc: Pointer; const AName: string);
@@ -86,19 +89,29 @@ class procedure TSQLite3Backup.EnsureResolved;
   end;
 
 begin
+  // Lock-free fast path once the class-var function pointers are resolved; they
+  // are never mutated again. Serialize the one-time resolve so concurrent
+  // first-use from multiple threads resolves exactly once without a torn table.
   if FResolved then
     Exit;
-  @_backup_init      := TSQLite3.GetAPIProc('sqlite3_backup_init');
-  @_backup_step      := TSQLite3.GetAPIProc('sqlite3_backup_step');
-  @_backup_finish    := TSQLite3.GetAPIProc('sqlite3_backup_finish');
-  @_backup_remaining := TSQLite3.GetAPIProc('sqlite3_backup_remaining');
-  @_backup_pagecount := TSQLite3.GetAPIProc('sqlite3_backup_pagecount');
-  Require(@_backup_init,      'sqlite3_backup_init');
-  Require(@_backup_step,      'sqlite3_backup_step');
-  Require(@_backup_finish,    'sqlite3_backup_finish');
-  Require(@_backup_remaining, 'sqlite3_backup_remaining');
-  Require(@_backup_pagecount, 'sqlite3_backup_pagecount');
-  FResolved := True;
+  TMonitor.Enter(FResolveLock);
+  try
+    if FResolved then
+      Exit;
+    @_backup_init      := TSQLite3.GetAPIProc('sqlite3_backup_init');
+    @_backup_step      := TSQLite3.GetAPIProc('sqlite3_backup_step');
+    @_backup_finish    := TSQLite3.GetAPIProc('sqlite3_backup_finish');
+    @_backup_remaining := TSQLite3.GetAPIProc('sqlite3_backup_remaining');
+    @_backup_pagecount := TSQLite3.GetAPIProc('sqlite3_backup_pagecount');
+    Require(@_backup_init,      'sqlite3_backup_init');
+    Require(@_backup_step,      'sqlite3_backup_step');
+    Require(@_backup_finish,    'sqlite3_backup_finish');
+    Require(@_backup_remaining, 'sqlite3_backup_remaining');
+    Require(@_backup_pagecount, 'sqlite3_backup_pagecount');
+    FResolved := True;
+  finally
+    TMonitor.Exit(FResolveLock);
+  end;
 end;
 
 class procedure TSQLite3Backup.BackupToFile(ASource: TSQLite3; const ADestPath: string);
@@ -169,5 +182,11 @@ begin
     Source.Free;
   end;
 end;
+
+initialization
+  FResolveLock := TObject.Create;
+
+finalization
+  FResolveLock.Free;
 
 end.

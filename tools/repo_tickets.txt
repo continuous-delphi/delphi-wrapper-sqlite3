@@ -134,6 +134,7 @@ Acceptance criteria:
 ---
 Title: Make the SQLite library loader thread-safe
 Issue: #8
+Status: closed
 Labels: enhancement
 Body:
 `TryLoadSQLite` (`source/Delphi.SQLite3.pas`) mutates the process-global

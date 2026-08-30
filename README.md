@@ -271,6 +271,8 @@ If the library is not present, `TSQLite3.Create` raises `ESQLite3Error`. Use `TS
 
 SQLite itself is thread-safe (serialized mode by default). However, a single `TSQLite3` instance and its associated `TSQLite3Query` objects should be used from one thread at a time, or the caller must serialize access. For multi-threaded applications, create a separate `TSQLite3` connection per thread.
 
+The one-time library load and symbol resolution (triggered lazily on first use of `TSQLite3` or `TSQLite3Backup`) is internally synchronized, so it is safe for multiple threads to make their first call concurrently -- the library is loaded exactly once. After loading, the steady-state path is lock-free.
+
 ## Demo Project
 
 ### APIBackup -- Todo List with Backup/Restore
@@ -287,7 +289,7 @@ The backup unit (`Delphi.SQLite3.Backup.pas` in `source/`) also serves as a refe
 
 ## Tests
 
-The test suite uses DUnitX and covers 68 tests:
+The test suite uses DUnitX and covers 69 tests:
 
 | Category | Tests |
 |---|---|
@@ -308,6 +310,7 @@ The test suite uses DUnitX and covers 68 tests:
 | Error handling | 2 |
 | Multiple queries | 1 |
 | Type coercion | 2 |
+| Concurrency | 1 |
 | Blob read / write | 3 |
 | NULL handling | 1 |
 | Backup / restore | 9 |
@@ -339,7 +342,7 @@ delphi-wrapper-sqlite3/
     Delphi.SQLite3.cc.inc         -- calling convention include (stdcall/cdecl)
     Delphi.SQLite3.Backup.pas     -- online backup/restore via raw API access
   test/
-    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (68 tests)
+    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (69 tests)
     Delphi.SQLite3.Test.pas       -- core wrapper tests
     Delphi.SQLite3.Backup.Test.pas-- backup/restore tests
   projects/
