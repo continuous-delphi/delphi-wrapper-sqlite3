@@ -73,6 +73,12 @@ type
     [Test]
     procedure TestInsertFloatParameter;
 
+    [Test]
+    procedure TestInsertBlobParameter;
+
+    [Test]
+    procedure TestInsertEmptyBlobParameter;
+
     // -- Query helpers ----------------------------------------------------
 
     [Test]
@@ -452,6 +458,67 @@ begin
     try
       Assert.IsTrue(Q.Next);
       Assert.AreEqual(Double(3.14159), Q.AsFloat(0), 0.00001);
+    finally
+      Q.Free;
+    end;
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestInsertBlobParameter;
+var
+  DB: TSQLite3;
+  Payload, ReadBack: TBytes;
+  Q: TSQLite3Query;
+  I: Integer;
+begin
+  DB := NewDbWithTable;
+  try
+    SetLength(Payload, 5);
+    Payload[0] := $DE;
+    Payload[1] := $AD;
+    Payload[2] := $BE;
+    Payload[3] := $EF;
+    Payload[4] := $00;  // embedded NUL -- ensure binary-safe, not text-terminated
+
+    DB.ExecSQL('INSERT INTO items (name, data) VALUES (:n, :d)', ['BlobRow', Blob(Payload)]);
+
+    Q := DB.Query('SELECT data FROM items WHERE id = 1');
+    try
+      Assert.IsTrue(Q.Next);
+      Assert.IsFalse(Q.IsNull(0), 'data should be a BLOB, not NULL');
+      ReadBack := Q.AsBlob(0);
+      Assert.AreEqual(NativeInt(5), Length(ReadBack), 'round-tripped length should match');
+      for I := 0 to High(Payload) do
+        Assert.AreEqual(Integer(Payload[I]), Integer(ReadBack[I]), Format('byte %d should match', [I]));
+    finally
+      Q.Free;
+    end;
+  finally
+    DB.Free;
+  end;
+end;
+
+procedure TSQLite3Tests.TestInsertEmptyBlobParameter;
+var
+  DB: TSQLite3;
+  Empty: TBytes;
+  Q: TSQLite3Query;
+begin
+  DB := NewDbWithTable;
+  try
+    SetLength(Empty, 0);
+    DB.ExecSQL('INSERT INTO items (name, data) VALUES (:n, :d)', ['EmptyBlob', Blob(Empty)]);
+
+    Q := DB.Query('SELECT data, typeof(data), length(data) FROM items WHERE id = 1');
+    try
+      Assert.IsTrue(Q.Next);
+      // An empty TBytes must bind a zero-length BLOB, distinct from NULL.
+      Assert.IsFalse(Q.IsNull(0), 'empty blob should not be NULL');
+      Assert.AreEqual('blob', Q.AsString(1), 'typeof should be blob, not null');
+      Assert.AreEqual(0, Q.AsInteger(2), 'length should be zero');
+      Assert.AreEqual(NativeInt(0), Length(Q.AsBlob(0)), 'AsBlob should return an empty array');
     finally
       Q.Free;
     end;

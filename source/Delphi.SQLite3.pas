@@ -41,6 +41,16 @@ type
 
   TSQLite3Query = class;
 
+  // Wraps a TBytes value so it can be passed as a BLOB bind parameter through
+  // an "array of const" list, e.g. ExecSQL(sql, [Blob(MyBytes)]). A dynamic
+  // array cannot ride through "array of const" directly, so the value must be
+  // wrapped. Create one with the Blob() factory function. An empty TBytes
+  // binds a zero-length BLOB (distinct from NULL).
+  ISQLite3Blob = interface
+    ['{2E1B9D4A-6C3F-4B8E-9A7D-5F1C0E2D3A46}']
+    function GetData: TBytes;
+  end;
+
   // Return True to cancel the running operation.
   TSQLite3ProgressFunc = reference to function: Boolean;
 
@@ -178,6 +188,12 @@ type
     // Resolve a column name to its 0-based index. Returns -1 if not found.
     function IndexOf(const AName: string): Integer;
   end;
+
+// Wrap a byte buffer as a BLOB bind parameter. Pass the result inside an
+// "array of const" parameter list:
+//   DB.ExecSQL('INSERT INTO t (data) VALUES (:d)', [Blob(MyBytes)]);
+// An empty TBytes binds a zero-length BLOB (distinct from NULL).
+function Blob(const AData: TBytes): ISQLite3Blob;
 
 implementation
 
@@ -404,6 +420,35 @@ begin
 end;
 
 // =========================================================================
+// TSQLite3Blob -- BLOB bind-parameter wrapper (see Blob() factory)
+// =========================================================================
+
+type
+  TSQLite3Blob = class(TInterfacedObject, ISQLite3Blob)
+  private
+    FData: TBytes;
+    function GetData: TBytes;
+  public
+    constructor Create(const AData: TBytes);
+  end;
+
+constructor TSQLite3Blob.Create(const AData: TBytes);
+begin
+  inherited Create;
+  FData := AData;
+end;
+
+function TSQLite3Blob.GetData: TBytes;
+begin
+  Result := FData;
+end;
+
+function Blob(const AData: TBytes): ISQLite3Blob;
+begin
+  Result := TSQLite3Blob.Create(AData);
+end;
+
+// =========================================================================
 // TSQLite3
 // =========================================================================
 
@@ -454,6 +499,8 @@ var
   I, Idx: Integer;
   Utf8: UTF8String;
   S: string;
+  BlobIntf: ISQLite3Blob;
+  Bytes: TBytes;
 begin
   for I := 0 to High(AParams) do
   begin
@@ -502,6 +549,23 @@ begin
             Check(_sqlite3_bind_null(AStmt, Idx))
           else
             raise ESQLite3Error.Create(0, Format('Unsupported non-nil pointer parameter at index %d', [I]));
+        end;
+      vtInterface:
+        begin
+          if Supports(IInterface(AParams[I].VInterface), ISQLite3Blob, BlobIntf) then
+          begin
+            Bytes := BlobIntf.GetData;
+            // Pass a non-nil pointer even for an empty buffer: sqlite3_bind_blob
+            // with a NULL data pointer binds NULL, but we want a zero-length BLOB.
+            // @Bytes is always a valid stack address; SQLITE_TRANSIENT copies nByte
+            // (0) bytes, so its contents are never read for an empty buffer.
+            if Length(Bytes) = 0 then
+              Check(_sqlite3_bind_blob(AStmt, Idx, @Bytes, 0, SQLITE_TRANSIENT))
+            else
+              Check(_sqlite3_bind_blob(AStmt, Idx, @Bytes[0], Length(Bytes), SQLITE_TRANSIENT));
+          end
+          else
+            raise ESQLite3Error.Create(0, Format('Unsupported interface parameter at index %d', [I]));
         end;
     else
       raise ESQLite3Error.Create(0, Format('Unsupported parameter type %d at index %d', [AParams[I].VType, I]));

@@ -4,7 +4,7 @@ interface
 
 const
 
-  Version = '0.1.22.0';
+  Version = '0.1.23.0';
 
 implementation
 

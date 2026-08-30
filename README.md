@@ -134,12 +134,33 @@ Parameters use `:name` placeholders in SQL and `array of const` values passed po
 | `Currency` | `sqlite3_bind_double` |
 | `string` | `sqlite3_bind_text` (UTF-8) |
 | `Boolean` | `sqlite3_bind_int` (0 or 1) |
+| `Blob(TBytes)` | `sqlite3_bind_blob` |
 | `nil` | `sqlite3_bind_null` |
 
 ```pascal
 DB.ExecSQL('INSERT INTO t (name, amount, active) VALUES (:n, :a, :f)', ['Bolt', 3.50, True]);
 DB.ExecSQL('UPDATE t SET name = :n WHERE id = :id', ['Nut', 42]);
 DB.ExecSQL('INSERT INTO t (optional) VALUES (:v)', [nil]);  // NULL
+```
+
+#### BLOB Parameters
+
+A `TBytes` value cannot ride through an `array of const` directly, so wrap it
+with the `Blob()` factory function to bind it as a BLOB. An empty `TBytes`
+binds a zero-length BLOB (distinct from NULL); read the value back with
+`TSQLite3Query.AsBlob`.
+
+```pascal
+var Data: TBytes := [$DE, $AD, $BE, $EF];
+DB.ExecSQL('INSERT INTO t (payload) VALUES (:d)', [Blob(Data)]);
+
+var Q := DB.Query('SELECT payload FROM t WHERE id = :id', [1]);
+try
+  if Q.Next then
+    Data := Q.AsBlob(0);
+finally
+  Q.Free;
+end;
 ```
 
 ### Error Handling
@@ -244,7 +265,7 @@ The backup unit (`Delphi.SQLite3.Backup.pas` in `source/`) also serves as a refe
 
 ## Tests
 
-The test suite uses DUnitX and covers 64 tests:
+The test suite uses DUnitX and covers 66 tests:
 
 | Category | Tests |
 |---|---|
@@ -264,7 +285,7 @@ The test suite uses DUnitX and covers 64 tests:
 | Error handling | 2 |
 | Multiple queries | 1 |
 | Type coercion | 2 |
-| Blob read | 1 |
+| Blob read / write | 3 |
 | NULL handling | 1 |
 | Backup / restore | 9 |
 
@@ -295,7 +316,7 @@ delphi-wrapper-sqlite3/
     Delphi.SQLite3.cc.inc         -- calling convention include (stdcall/cdecl)
     Delphi.SQLite3.Backup.pas     -- online backup/restore via raw API access
   test/
-    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (64 tests)
+    Delphi.SQLite3.Tests.dpr      -- DUnitX test project (66 tests)
     Delphi.SQLite3.Test.pas       -- core wrapper tests
     Delphi.SQLite3.Backup.Test.pas-- backup/restore tests
   projects/

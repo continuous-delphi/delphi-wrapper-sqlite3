@@ -37,3 +37,48 @@ Acceptance criteria:
 - [ ] IncVer step added as first pipeline action in clean-build-test-cover.json
 - [ ] Targets `source/Delphi.SQLite3.Info.pas`, style WinVer, part build
 - [ ] Running `Invoke-DelphiCi` increments the 4th version number
+---
+Title: Support binding BLOB (TBytes) parameters via ExecSQL/Query
+Issue: #6
+Status: closed
+Labels: enhancement
+Body:
+The FFI layer already imports and resolves `sqlite3_bind_blob`
+(`source/Delphi.SQLite3.pas`), and reads work: `TSQLite3Query.AsBlob`
+returns a `TBytes` from a column. But there is no way to WRITE a BLOB
+through the public parameterized API. `TSQLite3.BindParams` switches on
+`TVarRec.VType` and handles integer, boolean, int64, extended, currency,
+the string/char variants, and nil pointer -- there is no `TBytes`/BLOB
+case, so `ExecSQL(sql, [SomeBytes])` cannot bind binary data.
+
+Root cause: Delphi's `array of const` (`TVarRec`) has no variant tag for
+a dynamic array such as `TBytes`, so a byte buffer cannot ride through the
+existing `const AParams: array of const` signature as-is. A design decision
+is needed for how a caller expresses "this parameter is a BLOB".
+
+Candidate approaches (pick one during implementation):
+- A lightweight wrapper the caller passes by value, carried through
+  `array of const` as `vtObject`/`vtClass`/`vtPointer` and unwrapped in
+  `BindParams` (e.g. `ExecSQL(sql, [Blob(Bytes)])` where `Blob` returns a
+  recognizable object/interface). Keeps the single ergonomic call site.
+- A dedicated typed overload / builder that takes explicit `TBytes`
+  parameters positionally, avoiding `array of const` for BLOB writes.
+- Reuse `vtPointer` with an explicit length -- rejected as ambiguous,
+  since `vtPointer=nil` already means NULL and a bare pointer has no length.
+
+Whatever is chosen must bind via `_sqlite3_bind_blob(stmt, idx, data,
+nByte, SQLITE_TRANSIENT)` so SQLite copies the buffer (consistent with how
+text is bound with `SQLITE_TRANSIENT` today), and an empty `TBytes` must
+bind a zero-length BLOB (not NULL).
+
+Once implemented, review README/CHANGELOG for the new write path and add a
+round-trip test (bind a `TBytes` via `ExecSQL`, read it back via `AsBlob`,
+assert equality) in `test/Delphi.SQLite3.Test.pas`.
+
+Acceptance criteria:
+- [ ] A documented way to bind a `TBytes`/BLOB parameter on write exists
+- [ ] `BindParams` (or the new path) calls `sqlite3_bind_blob` with a
+      transient buffer copy
+- [ ] Empty `TBytes` binds a zero-length BLOB, distinct from NULL
+- [ ] Round-trip test writes a BLOB and reads it back byte-for-byte
+- [ ] README documents the BLOB write path; CHANGELOG entry added
